@@ -272,6 +272,52 @@ contract ToldyaHubTest is Test {
     // Admin
     // -----------------------------------------------------------------
 
+    // -----------------------------------------------------------------
+    // Evidence
+    // -----------------------------------------------------------------
+
+    function test_submitEvidence_emitsEvent() public {
+        uint256 id = _create(rob, ToldyaHub.Side.No, 100 ether);
+        vm.expectEmit(true, true, false, true);
+        emit ToldyaHub.EvidenceSubmitted(
+            id, tom, "QmTomBeerVideo123", ToldyaHub.MediaType.Video, "Tom failed at 0:28"
+        );
+        vm.prank(tom);
+        hub.submitEvidence(id, "QmTomBeerVideo123", ToldyaHub.MediaType.Video, "Tom failed at 0:28");
+    }
+
+    function test_submitEvidence_allowedDuringResolution() public {
+        uint256 id = _create(rob, ToldyaHub.Side.No, 100 ether);
+        vm.prank(tom);
+        hub.stake(id, ToldyaHub.Side.Yes, 50 ether);
+        vm.warp(block.timestamp + DEADLINE_OFFSET);
+        hub.triggerResolution(id);
+        // Still allowed in ResolutionRequested phase — agents may need to see late evidence.
+        vm.prank(sam);
+        hub.submitEvidence(id, "QmEvidence", ToldyaHub.MediaType.Image, "");
+    }
+
+    function test_submitEvidence_revertsWhenSettled() public {
+        uint256 id = _create(rob, ToldyaHub.Side.No, 100 ether);
+        vm.prank(tom);
+        hub.stake(id, ToldyaHub.Side.Yes, 50 ether);
+        vm.warp(block.timestamp + DEADLINE_OFFSET);
+        hub.triggerResolution(id);
+        vm.prank(oracle);
+        hub.resolveMarket(id, true);
+
+        vm.expectRevert(ToldyaHub.EvidenceLocked.selector);
+        vm.prank(tom);
+        hub.submitEvidence(id, "QmLate", ToldyaHub.MediaType.Image, "");
+    }
+
+    function test_submitEvidence_revertsOnEmptyCid() public {
+        uint256 id = _create(rob, ToldyaHub.Side.No, 100 ether);
+        vm.expectRevert(ToldyaHub.EmptyEvidence.selector);
+        vm.prank(tom);
+        hub.submitEvidence(id, "", ToldyaHub.MediaType.Image, "");
+    }
+
     function test_setOracle_onlyOwner() public {
         vm.prank(rob);
         vm.expectRevert();

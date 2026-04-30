@@ -1,64 +1,63 @@
 "use client";
 
+import Link from "next/link";
 import {useEffect, useState} from "react";
 import {usePublicClient} from "wagmi";
 import {Header} from "@/components/Header";
-import {MarketCard, type MarketView} from "@/components/MarketCard";
-import {HUB_ADDRESS, hubAbi} from "@/lib/contracts";
+import {EventCard} from "@/components/EventCard";
+import {fetchFeed, type FeedEvent} from "@/lib/events";
 
-export default function Home() {
+export default function FeedPage() {
     const client = usePublicClient();
-    const [markets, setMarkets] = useState<MarketView[]>([]);
+    const [events, setEvents] = useState<FeedEvent[]>([]);
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
         if (!client) return;
         let cancelled = false;
-        (async () => {
-            setLoading(true);
-            const next = (await client.readContract({
-                address: HUB_ADDRESS,
-                abi: hubAbi,
-                functionName: "nextMarketId",
-            })) as bigint;
-
-            const ids = Array.from({length: Number(next)}, (_, i) => BigInt(i));
-            const fetched = await Promise.all(
-                ids.map(async (id) => {
-                    const m = (await client.readContract({
-                        address: HUB_ADDRESS,
-                        abi: hubAbi,
-                        functionName: "getMarket",
-                        args: [id],
-                    })) as MarketView;
-                    return {...m, id};
-                }),
-            );
-            if (!cancelled) {
-                setMarkets(fetched.reverse());
-                setLoading(false);
+        const load = async () => {
+            try {
+                const e = await fetchFeed(client);
+                if (!cancelled) setEvents(e);
+            } catch (err) {
+                console.error("feed fetch failed", err);
+            } finally {
+                if (!cancelled) setLoading(false);
             }
-        })().catch((e) => {
-            console.error(e);
-            if (!cancelled) setLoading(false);
-        });
+        };
+        load();
+        const t = setInterval(load, 8000);
         return () => {
             cancelled = true;
+            clearInterval(t);
         };
     }, [client]);
 
     return (
         <div className="container">
             <Header />
-            <h2 style={{marginTop: 0}}>Live markets</h2>
-            {loading && <p className="muted">Loading…</p>}
-            {!loading && markets.length === 0 && (
-                <p className="muted">
-                    No markets yet. <a href="/create">Open the first one.</a>
-                </p>
+
+            <div className="section-heading">
+                <h2>Feed</h2>
+                <Link href="/markets" className="muted" style={{fontSize: "0.85rem"}}>
+                    browse all markets →
+                </Link>
+            </div>
+
+            {loading && events.length === 0 && <p className="muted">Loading activity…</p>}
+            {!loading && events.length === 0 && (
+                <div className="empty">
+                    <p>Nothing yet. Be first.</p>
+                    <Link href="/create" className="btn btn-primary">
+                        Open a market →
+                    </Link>
+                </div>
             )}
-            {markets.map((m) => (
-                <MarketCard key={m.id.toString()} market={m} />
+            {events.map((e) => (
+                <EventCard
+                    key={`${e.blockNumber.toString()}-${e.logIndex}-${e.kind}-${e.marketId.toString()}`}
+                    event={e}
+                />
             ))}
         </div>
     );

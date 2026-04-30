@@ -28,6 +28,13 @@ contract ToldyaHub is ReentrancyGuard, Ownable {
         Voided
     }
 
+    enum MediaType {
+        Image,
+        Video,
+        Audio,
+        Text
+    }
+
     struct Market {
         address creator;
         uint64 deadline;
@@ -68,6 +75,13 @@ contract ToldyaHub is ReentrancyGuard, Ownable {
     event ResolutionRequested(uint256 indexed marketId, string question, string criteria);
     event MarketResolved(uint256 indexed marketId, Status outcome);
     event Claimed(uint256 indexed marketId, address indexed staker, uint256 amount);
+    event EvidenceSubmitted(
+        uint256 indexed marketId,
+        address indexed submitter,
+        string cid,
+        MediaType mediaType,
+        string description
+    );
     event OracleUpdated(address indexed oracle);
     event TreasuryUpdated(address indexed treasury);
 
@@ -82,6 +96,8 @@ contract ToldyaHub is ReentrancyGuard, Ownable {
     error AlreadyClaimed();
     error NothingToClaim();
     error AlreadyRequested();
+    error EvidenceLocked();
+    error EmptyEvidence();
 
     constructor(IERC20 _stakeToken, address _oracle, address _treasury) Ownable(msg.sender) {
         stakeToken = _stakeToken;
@@ -174,6 +190,25 @@ contract ToldyaHub is ReentrancyGuard, Ownable {
 
         m.status = Status.ResolutionRequested;
         emit ResolutionRequested(marketId, m.question, m.criteria);
+    }
+
+    /// @notice Submit evidence (an IPFS-style CID pointing at an image/video/audio)
+    ///         attached to a market. Anyone may submit while the market is open or
+    ///         in the resolution-requested phase; the AI oracle filters relevance.
+    ///         The CID and metadata are emitted as events; nothing is stored
+    ///         on-chain to keep gas down.
+    function submitEvidence(
+        uint256 marketId,
+        string calldata cid,
+        MediaType mediaType,
+        string calldata description
+    ) external {
+        Market storage m = markets[marketId];
+        if (m.status != Status.Open && m.status != Status.ResolutionRequested) {
+            revert EvidenceLocked();
+        }
+        if (bytes(cid).length == 0) revert EmptyEvidence();
+        emit EvidenceSubmitted(marketId, msg.sender, cid, mediaType, description);
     }
 
     /// @notice Called by the oracle agent with the verdict.

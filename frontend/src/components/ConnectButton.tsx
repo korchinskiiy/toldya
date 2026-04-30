@@ -9,7 +9,7 @@ export function ConnectButton() {
 
     if (isConnected && address) {
         return (
-            <button className="secondary" onClick={() => disconnect()}>
+            <button onClick={() => disconnect()} title="Disconnect wallet">
                 {address.slice(0, 6)}…{address.slice(-4)}
             </button>
         );
@@ -17,8 +17,12 @@ export function ConnectButton() {
 
     const injected = connectors.find((c) => c.id === "injected") ?? connectors[0];
     return (
-        <button onClick={() => injected && connect({connector: injected})} disabled={isPending}>
-            {isPending ? "Connecting…" : "Connect wallet"}
+        <button
+            className="primary"
+            onClick={() => injected && connect({connector: injected})}
+            disabled={isPending}
+        >
+            {isPending ? "Connecting…" : "Connect"}
         </button>
     );
 }

@@ -11,6 +11,9 @@ contracts/cache/
 contracts/broadcast/
 contracts/lib/
 
+# User-uploaded evidence (local dev storage, not source)
+frontend/public/uploads/
+
 # Env
 .env
 .env.local
