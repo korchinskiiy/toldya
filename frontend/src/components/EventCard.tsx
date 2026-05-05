@@ -1,4 +1,3 @@
-import Link from "next/link";
 import {UserChip} from "./UserChip";
 import type {FeedEvent} from "@/lib/events";
 import {relativeTime} from "@/lib/events";
@@ -20,8 +19,6 @@ function OutcomeTag({outcome}: {outcome: number}) {
 }
 
 export function EventCard({event}: {event: FeedEvent}) {
-    const marketLink = `/markets/${event.marketId.toString()}`;
-
     let line: React.ReactNode;
     let actor: string | null = null;
 
@@ -96,9 +93,7 @@ export function EventCard({event}: {event: FeedEvent}) {
                     {relativeTime(event.timestamp)}
                 </span>
             </div>
-            <Link href={marketLink} className="event-question">
-                {event.question}
-            </Link>
+            <span className="event-question">{event.question}</span>
         </article>
     );
 }

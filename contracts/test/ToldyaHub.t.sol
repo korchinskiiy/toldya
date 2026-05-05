@@ -33,13 +33,21 @@ contract ToldyaHubTest is Test {
     }
 
     function _create(address creator, ToldyaHub.Side side, uint256 amount) internal returns (uint256) {
+        return _create(creator, side, amount, true);
+    }
+
+    function _create(address creator, ToldyaHub.Side side, uint256 amount, bool oracleEnabled)
+        internal
+        returns (uint256)
+    {
         vm.prank(creator);
         return hub.createMarket(
             "Will Tom finish a beer in 30s?",
             "Tom drinks a 0.5L beer; timer starts at first sip; YES if empty within 30s.",
             uint64(block.timestamp + DEADLINE_OFFSET),
             side,
-            amount
+            amount,
+            oracleEnabled
         );
     }
 
@@ -60,19 +68,38 @@ contract ToldyaHubTest is Test {
     function test_createMarket_revertsOnPastDeadline() public {
         vm.expectRevert(ToldyaHub.InvalidDeadline.selector);
         vm.prank(rob);
-        hub.createMarket("q", "c", uint64(block.timestamp), ToldyaHub.Side.Yes, 10 ether);
+        hub.createMarket("q", "c", uint64(block.timestamp), ToldyaHub.Side.Yes, 10 ether, true);
     }
 
     function test_createMarket_revertsOnEmptyQuestion() public {
         vm.expectRevert(ToldyaHub.EmptyQuestion.selector);
         vm.prank(rob);
-        hub.createMarket("", "c", uint64(block.timestamp + 1 days), ToldyaHub.Side.Yes, 10 ether);
+        hub.createMarket("", "c", uint64(block.timestamp + 1 days), ToldyaHub.Side.Yes, 10 ether, true);
     }
 
     function test_createMarket_revertsBelowMinStake() public {
         vm.expectRevert(ToldyaHub.StakeTooSmall.selector);
         vm.prank(rob);
-        hub.createMarket("q", "c", uint64(block.timestamp + 1 days), ToldyaHub.Side.Yes, 1);
+        hub.createMarket("q", "c", uint64(block.timestamp + 1 days), ToldyaHub.Side.Yes, 1, true);
+    }
+
+    function test_triggerResolution_revertsIfOracleDisabled() public {
+        // Market created with oracleEnabled = false
+        uint256 id = _create(rob, ToldyaHub.Side.No, 100 ether, false);
+        vm.prank(tom);
+        hub.stake(id, ToldyaHub.Side.Yes, 50 ether);
+        vm.warp(block.timestamp + DEADLINE_OFFSET);
+        vm.expectRevert(ToldyaHub.OracleDisabled.selector);
+        hub.triggerResolution(id);
+    }
+
+    function test_triggerResolution_voidsEmptySideEvenIfOracleDisabled() public {
+        // Empty-side void should still work even when oracle is disabled —
+        // it doesn't actually need the oracle.
+        uint256 id = _create(rob, ToldyaHub.Side.No, 100 ether, false);
+        vm.warp(block.timestamp + DEADLINE_OFFSET);
+        hub.triggerResolution(id);
+        assertEq(uint256(hub.getMarket(id).status), uint256(ToldyaHub.Status.Voided));
     }
 
     // -----------------------------------------------------------------
@@ -271,6 +298,108 @@ contract ToldyaHubTest is Test {
     // -----------------------------------------------------------------
     // Admin
     // -----------------------------------------------------------------
+
+    // -----------------------------------------------------------------
+    // Mutual resolution (vote)
+    // -----------------------------------------------------------------
+
+    function test_voteResolution_revertsBeforeDeadline() public {
+        uint256 id = _create(rob, ToldyaHub.Side.No, 100 ether);
+        vm.expectRevert(ToldyaHub.DeadlineNotReached.selector);
+        vm.prank(rob);
+        hub.voteResolution(id, true);
+    }
+
+    function test_voteResolution_revertsIfNotStaker() public {
+        uint256 id = _create(rob, ToldyaHub.Side.No, 100 ether);
+        vm.prank(tom);
+        hub.stake(id, ToldyaHub.Side.Yes, 50 ether);
+        vm.warp(block.timestamp + DEADLINE_OFFSET);
+        vm.expectRevert(ToldyaHub.NotAStaker.selector);
+        vm.prank(sam); // sam never staked
+        hub.voteResolution(id, true);
+    }
+
+    function test_voteResolution_unanimousResolvesYes() public {
+        uint256 id = _create(rob, ToldyaHub.Side.No, 100 ether);
+        vm.prank(tom);
+        hub.stake(id, ToldyaHub.Side.Yes, 50 ether);
+        vm.warp(block.timestamp + DEADLINE_OFFSET);
+
+        vm.prank(rob);
+        hub.voteResolution(id, true);
+        // After one vote, status still Open
+        assertEq(uint256(hub.getMarket(id).status), uint256(ToldyaHub.Status.Open));
+
+        vm.prank(tom);
+        hub.voteResolution(id, true);
+        // Both agreed YES — resolved
+        assertEq(uint256(hub.getMarket(id).status), uint256(ToldyaHub.Status.ResolvedYes));
+    }
+
+    function test_voteResolution_disagreementStaysOpen() public {
+        uint256 id = _create(rob, ToldyaHub.Side.No, 100 ether);
+        vm.prank(tom);
+        hub.stake(id, ToldyaHub.Side.Yes, 50 ether);
+        vm.warp(block.timestamp + DEADLINE_OFFSET);
+
+        vm.prank(rob);
+        hub.voteResolution(id, true);
+        vm.prank(tom);
+        hub.voteResolution(id, false);
+
+        // Disagreement → stays Open, oracle path remains
+        assertEq(uint256(hub.getMarket(id).status), uint256(ToldyaHub.Status.Open));
+    }
+
+    function test_voteResolution_voteOverrideWorks() public {
+        // A staker can change their vote until consensus is reached
+        uint256 id = _create(rob, ToldyaHub.Side.No, 100 ether);
+        vm.prank(tom);
+        hub.stake(id, ToldyaHub.Side.Yes, 50 ether);
+        vm.warp(block.timestamp + DEADLINE_OFFSET);
+
+        vm.prank(rob);
+        hub.voteResolution(id, true);
+        vm.prank(tom);
+        hub.voteResolution(id, false);
+        // Disagreement so far. Tom changes to YES.
+        vm.prank(tom);
+        hub.voteResolution(id, true);
+        assertEq(uint256(hub.getMarket(id).status), uint256(ToldyaHub.Status.ResolvedYes));
+    }
+
+    function test_voteResolution_oraclePathStillWorksAfterDisagreement() public {
+        // If parties disagree, anyone can fall back to oracle.
+        uint256 id = _create(rob, ToldyaHub.Side.No, 100 ether);
+        vm.prank(tom);
+        hub.stake(id, ToldyaHub.Side.Yes, 50 ether);
+        vm.warp(block.timestamp + DEADLINE_OFFSET);
+
+        vm.prank(rob);
+        hub.voteResolution(id, true);
+        vm.prank(tom);
+        hub.voteResolution(id, false);
+
+        hub.triggerResolution(id);
+        vm.prank(oracle);
+        hub.resolveMarket(id, true);
+        assertEq(uint256(hub.getMarket(id).status), uint256(ToldyaHub.Status.ResolvedYes));
+    }
+
+    function test_getStakers_returnsUniqueAddresses() public {
+        uint256 id = _create(rob, ToldyaHub.Side.No, 100 ether);
+        vm.prank(tom);
+        hub.stake(id, ToldyaHub.Side.Yes, 50 ether);
+        vm.startPrank(tom);
+        hub.stake(id, ToldyaHub.Side.Yes, 25 ether); // second stake, same address
+        vm.stopPrank();
+        vm.prank(sam);
+        hub.stake(id, ToldyaHub.Side.Yes, 25 ether);
+
+        address[] memory s = hub.getStakers(id);
+        assertEq(s.length, 3, "rob + tom + sam");
+    }
 
     // -----------------------------------------------------------------
     // Evidence

@@ -39,6 +39,7 @@ contract ToldyaHub is ReentrancyGuard, Ownable {
         address creator;
         uint64 deadline;
         Status status;
+        bool oracleEnabled; // creator's choice at market creation
         string question;
         string criteria;
         uint256 yesPool; // sum of net (post-fee) YES stakes
@@ -62,6 +63,12 @@ contract ToldyaHub is ReentrancyGuard, Ownable {
     mapping(uint256 => mapping(address => uint256)) public noStake;
     mapping(uint256 => mapping(address => bool)) public claimed;
 
+    // Mutual-resolution state: track unique stakers per market and their votes.
+    // 0 = no vote, 1 = YES, 2 = NO.
+    mapping(uint256 => address[]) internal _stakers;
+    mapping(uint256 => mapping(address => bool)) public hasStaked;
+    mapping(uint256 => mapping(address => uint8)) public resolutionVote;
+
     event MarketCreated(
         uint256 indexed marketId,
         address indexed creator,
@@ -72,6 +79,7 @@ contract ToldyaHub is ReentrancyGuard, Ownable {
         string criteria
     );
     event Staked(uint256 indexed marketId, address indexed staker, Side side, uint256 netStake);
+    event ResolutionVoted(uint256 indexed marketId, address indexed party, bool yesWon);
     event ResolutionRequested(uint256 indexed marketId, string question, string criteria);
     event MarketResolved(uint256 indexed marketId, Status outcome);
     event Claimed(uint256 indexed marketId, address indexed staker, uint256 amount);
@@ -98,6 +106,8 @@ contract ToldyaHub is ReentrancyGuard, Ownable {
     error AlreadyRequested();
     error EvidenceLocked();
     error EmptyEvidence();
+    error NotAStaker();
+    error OracleDisabled();
 
     constructor(IERC20 _stakeToken, address _oracle, address _treasury) Ownable(msg.sender) {
         stakeToken = _stakeToken;
@@ -124,12 +134,16 @@ contract ToldyaHub is ReentrancyGuard, Ownable {
     // -------------------------------------------------------------------------
 
     /// @notice Open a new market. Creator commits the first stake on `side`.
+    /// @param oracleEnabled If true, anyone can escalate to the AI oracle when
+    ///        stakers can't agree. If false, the market can only be resolved by
+    ///        unanimous staker vote.
     function createMarket(
         string calldata question,
         string calldata criteria,
         uint64 deadline,
         Side side,
-        uint256 amount
+        uint256 amount,
+        bool oracleEnabled
     ) external nonReentrant returns (uint256 marketId) {
         if (bytes(question).length == 0) revert EmptyQuestion();
         if (deadline <= block.timestamp) revert InvalidDeadline();
@@ -140,6 +154,7 @@ contract ToldyaHub is ReentrancyGuard, Ownable {
         m.creator = msg.sender;
         m.deadline = deadline;
         m.status = Status.Open;
+        m.oracleEnabled = oracleEnabled;
         m.question = question;
         m.criteria = criteria;
 
@@ -151,6 +166,7 @@ contract ToldyaHub is ReentrancyGuard, Ownable {
             m.noPool = net;
             noStake[marketId][msg.sender] = net;
         }
+        _registerStaker(marketId, msg.sender);
 
         emit MarketCreated(marketId, msg.sender, side, deadline, net, question, criteria);
     }
@@ -170,12 +186,14 @@ contract ToldyaHub is ReentrancyGuard, Ownable {
             m.noPool += net;
             noStake[marketId][msg.sender] += net;
         }
+        _registerStaker(marketId, msg.sender);
 
         emit Staked(marketId, msg.sender, side, net);
     }
 
-    /// @notice Anyone can trigger resolution after the deadline. Emits an event
-    ///         that the off-chain oracle agent listens for.
+    /// @notice Anyone can trigger oracle resolution after the deadline (if the
+    ///         creator opted in to oracle fallback). Emits an event the off-chain
+    ///         AI oracle agent listens for.
     function triggerResolution(uint256 marketId) external {
         Market storage m = markets[marketId];
         if (m.status != Status.Open) revert AlreadyRequested();
@@ -188,8 +206,37 @@ contract ToldyaHub is ReentrancyGuard, Ownable {
             return;
         }
 
+        if (!m.oracleEnabled) revert OracleDisabled();
+
         m.status = Status.ResolutionRequested;
         emit ResolutionRequested(marketId, m.question, m.criteria);
+    }
+
+    /// @notice Mutual resolution path: any staker can vote on the outcome after
+    ///         the deadline. If every staker has voted and they all agree, the
+    ///         market resolves immediately — no oracle needed. If they disagree,
+    ///         the market stays Open and anyone can fall back to the oracle path
+    ///         via triggerResolution().
+    function voteResolution(uint256 marketId, bool yesWon) external {
+        Market storage m = markets[marketId];
+        if (m.status != Status.Open) revert MarketNotOpen();
+        if (block.timestamp < m.deadline) revert DeadlineNotReached();
+        if (!hasStaked[marketId][msg.sender]) revert NotAStaker();
+
+        resolutionVote[marketId][msg.sender] = yesWon ? 1 : 2;
+        emit ResolutionVoted(marketId, msg.sender, yesWon);
+
+        // Check if all stakers have voted unanimously.
+        address[] storage s = _stakers[marketId];
+        uint8 first = resolutionVote[marketId][s[0]];
+        if (first == 0) return;
+        for (uint256 i = 1; i < s.length; i++) {
+            if (resolutionVote[marketId][s[i]] != first) return;
+        }
+
+        // Unanimous → resolve.
+        m.status = first == 1 ? Status.ResolvedYes : Status.ResolvedNo;
+        emit MarketResolved(marketId, m.status);
     }
 
     /// @notice Submit evidence (an IPFS-style CID pointing at an image/video/audio)
@@ -278,9 +325,20 @@ contract ToldyaHub is ReentrancyGuard, Ownable {
         return markets[marketId];
     }
 
+    function getStakers(uint256 marketId) external view returns (address[] memory) {
+        return _stakers[marketId];
+    }
+
     // -------------------------------------------------------------------------
     // Internal
     // -------------------------------------------------------------------------
+
+    function _registerStaker(uint256 marketId, address who) internal {
+        if (!hasStaked[marketId][who]) {
+            hasStaked[marketId][who] = true;
+            _stakers[marketId].push(who);
+        }
+    }
 
     function _pullAndFee(address from, uint256 amount) internal returns (uint256 net) {
         uint256 fee = (amount * FEE_BPS) / BPS_DENOM;

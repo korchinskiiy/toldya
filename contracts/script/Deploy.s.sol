@@ -9,8 +9,12 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 contract Deploy is Script {
     function run() external {
         uint256 pk = vm.envUint("DEPLOYER_PK");
-        address oracle = vm.envAddress("ORACLE_ADDRESS");
-        address treasury = vm.envAddress("TREASURY_ADDRESS");
+        address deployer = vm.addr(pk);
+
+        // Oracle and treasury default to the deployer if not explicitly set.
+        // They can be rotated later via setOracle / setTreasury on the hub.
+        address oracle = vm.envOr("ORACLE_ADDRESS", deployer);
+        address treasury = vm.envOr("TREASURY_ADDRESS", deployer);
         address tokenAddr = vm.envOr("STAKE_TOKEN", address(0));
 
         vm.startBroadcast(pk);
@@ -25,6 +29,10 @@ contract Deploy is Script {
         }
 
         ToldyaHub hub = new ToldyaHub(token, oracle, treasury);
+        console2.log("Deployer", deployer);
+        console2.log("Oracle  ", oracle);
+        console2.log("Treasury", treasury);
+        console2.log("Token   ", address(token));
         console2.log("ToldyaHub deployed", address(hub));
 
         vm.stopBroadcast();

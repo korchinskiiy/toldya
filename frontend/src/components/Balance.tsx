@@ -4,6 +4,7 @@ import {useState} from "react";
 import {useAccount, usePublicClient, useReadContract, useWriteContract} from "wagmi";
 import {TOKEN_ADDRESS, erc20Abi} from "@/lib/contracts";
 import {formatTaiko, parseTaiko} from "@/lib/format";
+import {ALLOWED_CHAIN} from "@/lib/wagmi";
 
 const FAUCET_AMOUNT = parseTaiko("1000");
 
@@ -41,6 +42,7 @@ export function Balance() {
         setBusy(true);
         try {
             const hash = await writeContractAsync({
+                chainId: ALLOWED_CHAIN.id,
                 address: TOKEN_ADDRESS,
                 abi: mintAbi,
                 functionName: "mint",

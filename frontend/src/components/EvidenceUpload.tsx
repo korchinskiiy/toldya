@@ -3,6 +3,7 @@
 import {useRef, useState} from "react";
 import {useAccount, usePublicClient, useWriteContract} from "wagmi";
 import {HUB_ADDRESS, detectMediaType, hubAbi} from "@/lib/contracts";
+import {ALLOWED_CHAIN} from "@/lib/wagmi";
 
 export function EvidenceUpload({
     marketId,
@@ -44,6 +45,7 @@ export function EvidenceUpload({
 
             setStage("signing");
             const hash = await writeContractAsync({
+                chainId: ALLOWED_CHAIN.id,
                 address: HUB_ADDRESS,
                 abi: hubAbi,
                 functionName: "submitEvidence",

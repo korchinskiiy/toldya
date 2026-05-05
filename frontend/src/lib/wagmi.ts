@@ -2,20 +2,25 @@ import {createConfig, http} from "wagmi";
 import {defineChain} from "viem";
 import {injected} from "wagmi/connectors";
 
-const chainId = Number(process.env.NEXT_PUBLIC_CHAIN_ID ?? 167009);
-const rpcUrl = process.env.NEXT_PUBLIC_RPC_URL ?? "https://rpc.hekla.taiko.xyz";
+const rpcUrl = process.env.NEXT_PUBLIC_RPC_URL ?? "https://rpc.hoodi.taiko.xyz";
 
-export const taikoHekla = defineChain({
-    id: chainId,
-    name: "Taiko Hekla",
+// Hard-locked to Taiko Hoodi testnet (167013). Hekla was sunset and replaced
+// by Hoodi. Toldya is intentionally single-chain to prevent accidental mainnet
+// transactions — do NOT add other chains here without updating ChainGuard.
+export const taikoHoodi = defineChain({
+    id: 167013,
+    name: "Taiko Hoodi",
     nativeCurrency: {name: "Ether", symbol: "ETH", decimals: 18},
     rpcUrls: {default: {http: [rpcUrl]}},
-    blockExplorers: {default: {name: "Taikoscan", url: "https://hekla.taikoscan.network"}},
+    blockExplorers: {default: {name: "Taikoscan", url: "https://hoodi.taikoscan.io"}},
+    testnet: true,
 });
 
+export const ALLOWED_CHAIN = taikoHoodi;
+
 export const wagmiConfig = createConfig({
-    chains: [taikoHekla],
+    chains: [taikoHoodi],
     connectors: [injected()],
-    transports: {[taikoHekla.id]: http(rpcUrl)},
+    transports: {[taikoHoodi.id]: http(rpcUrl)},
     ssr: true,
 });
