@@ -1,8 +1,24 @@
-export const HUB_ADDRESS = (process.env.NEXT_PUBLIC_HUB_ADDRESS ??
-    "0x0000000000000000000000000000000000000000") as `0x${string}`;
+function requireAddress(name: string, value: string | undefined): `0x${string}` {
+    if (!value || !/^0x[0-9a-fA-F]{40}$/.test(value) || /^0x0+$/.test(value)) {
+        // Build-time / runtime guard: a missing or zero address would silently
+        // route every contract call to 0x0, which is the worst kind of bug.
+        throw new Error(
+            `${name} is not set. Configure it in your environment ` +
+                "(e.g. Vercel project → Settings → Environment Variables).",
+        );
+    }
+    return value as `0x${string}`;
+}
 
-export const TOKEN_ADDRESS = (process.env.NEXT_PUBLIC_TOKEN_ADDRESS ??
-    "0x0000000000000000000000000000000000000000") as `0x${string}`;
+export const HUB_ADDRESS = requireAddress(
+    "NEXT_PUBLIC_HUB_ADDRESS",
+    process.env.NEXT_PUBLIC_HUB_ADDRESS,
+);
+
+export const TOKEN_ADDRESS = requireAddress(
+    "NEXT_PUBLIC_TOKEN_ADDRESS",
+    process.env.NEXT_PUBLIC_TOKEN_ADDRESS,
+);
 
 export const hubAbi = [
     {

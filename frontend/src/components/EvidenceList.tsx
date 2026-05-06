@@ -72,7 +72,7 @@ export function EvidenceList({
     return (
         <div className="evidence-list">
             {items.map((e) => {
-                const url = `/uploads/${e.cid}`;
+                const url = /^https?:\/\//.test(e.cid) ? e.cid : `/uploads/${e.cid}`;
                 return (
                     <div key={`${e.blockNumber.toString()}-${e.logIndex}`} className="evidence-item">
                         <div className="evidence-meta">
