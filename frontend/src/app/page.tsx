@@ -8,7 +8,6 @@ import {deadlineLabel, formatTaiko, parseTaiko} from "@/lib/format";
 import {EvidenceList} from "@/components/EvidenceList";
 import {EvidenceUpload} from "@/components/EvidenceUpload";
 import {EventCard} from "@/components/EventCard";
-import {MatrixRain} from "@/components/MatrixRain";
 import {fetchFeed, type FeedEvent} from "@/lib/events";
 import {Avatar} from "@/lib/avatar";
 
@@ -40,7 +39,7 @@ type Market = {
     noPool: bigint;
 };
 
-const STATUS_LABEL = ["LIVE", "RESOLVING", "YES_WON", "NO_WON", "VOIDED"];
+const STATUS_LABEL = ["Live", "Resolving", "YES won", "NO won", "Voided"];
 
 function Confetti() {
     const pieces = Array.from({length: 60});
@@ -78,7 +77,6 @@ export default function Home() {
 
     return (
         <div className="container">
-            <MatrixRain />
             <Topbar />
 
             {!isConnected && <ConnectPanel />}
@@ -185,7 +183,7 @@ function ConnectPanel() {
                 Skip the argument.
             </h1>
             <div className="hero-rotator" aria-live="polite">
-                <span className="hero-rotator-q" key={exIdx}>&gt; {HERO_EXAMPLES[exIdx]}</span>
+                <span className="hero-rotator-q" key={exIdx}>{HERO_EXAMPLES[exIdx]}</span>
             </div>
             <p className="hero-sub">
                 Open a YES/NO market, friends stake TAIKO, an AI agent settles it after the deadline.
@@ -544,14 +542,14 @@ function MarketList({address}: {address: `0x${string}` | undefined}) {
     if (markets.length === 0) {
         return (
             <div className="empty-card">
-                <h2 className="empty-title">// no bets in the queue — boot one up</h2>
+                <h2 className="empty-title">No bets yet — start one.</h2>
                 <p className="empty-sub">
                     A good toldya bet is short, judgeable, and has a real deadline. Try something like:
                 </p>
                 <div className="empty-examples">
-                    <span className="ex">&gt; will Tom finish the beer in 30s?</span>
-                    <span className="ex">&gt; will it rain on Saturday?</span>
-                    <span className="ex">&gt; will Marco be late to dinner?</span>
+                    <span className="ex">"Will Tom finish the beer in 30s?"</span>
+                    <span className="ex">"Will it rain on Saturday?"</span>
+                    <span className="ex">"Will Marco be late to dinner?"</span>
                 </div>
             </div>
         );
@@ -820,17 +818,17 @@ function MarketCard({market, viewer, onChange}: {market: Market; viewer: `0x${st
             {celebrate && <Confetti />}
             {market.status === 2 && (
                 <div className="mc-banner mc-banner-yes">
-                    &gt; [YES_WON] :: payout {formatTaiko(total)} mTAIKO
+                    YES won — {formatTaiko(total)} mTAIKO paid out
                 </div>
             )}
             {market.status === 3 && (
                 <div className="mc-banner mc-banner-no">
-                    &gt; [NO_WON] :: payout {formatTaiko(total)} mTAIKO
+                    NO won — {formatTaiko(total)} mTAIKO paid out
                 </div>
             )}
             {market.status === 4 && (
                 <div className="mc-banner mc-banner-voided">
-                    &gt; [VOIDED] :: stakes refunded
+                    Voided — stakes refunded
                 </div>
             )}
             <header className="mc-top">
@@ -999,8 +997,8 @@ function ResolutionPanel({
 }) {
     return (
         <div className="verdict">
-            <div className="verdict-eyebrow">$ awaiting_verdict — deadline passed</div>
-            <h4 className="verdict-title">Settle this bet.</h4>
+            <div className="verdict-eyebrow">Awaiting verdict · deadline passed</div>
+            <h4 className="verdict-title">Time for a verdict.</h4>
 
             <div className="verdict-step">
                 <div className="verdict-step-h">
