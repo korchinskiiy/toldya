@@ -1,7 +1,8 @@
 "use client";
 
 import {useEffect, useState} from "react";
-import {useAccount, useChainId, useConnect, useDisconnect, usePublicClient, useReadContract, useSwitchChain, useWriteContract} from "wagmi";
+import {useAccount, useChainId, usePublicClient, useReadContract, useSwitchChain, useWriteContract} from "wagmi";
+import {useAppKit} from "@reown/appkit/react";
 import {ALLOWED_CHAIN} from "@/lib/wagmi";
 import {HUB_ADDRESS, TOKEN_ADDRESS, erc20Abi, hubAbi} from "@/lib/contracts";
 import {deadlineLabel, formatTaiko, parseTaiko} from "@/lib/format";
@@ -104,7 +105,7 @@ export default function Home() {
 function Topbar() {
     const {address, isConnected} = useAccount();
     const chainId = useChainId();
-    const {disconnect} = useDisconnect();
+    const {open} = useAppKit();
 
     const chainOk = chainId === ALLOWED_CHAIN.id;
 
@@ -137,8 +138,8 @@ function Topbar() {
                         )}
                         <button
                             className="topbar-wallet"
-                            onClick={() => disconnect()}
-                            title="Click to disconnect"
+                            onClick={() => open({view: "Account"})}
+                            title="Manage account"
                         >
                             <Avatar address={address} size={22} />
                             <span className="topbar-wallet-addr">
@@ -166,8 +167,7 @@ const HERO_EXAMPLES = [
 ];
 
 function ConnectPanel() {
-    const {connect, connectors, isPending, error} = useConnect();
-    const injected = connectors.find((c) => c.id === "injected") ?? connectors[0];
+    const {open} = useAppKit();
 
     const [exIdx, setExIdx] = useState(0);
     useEffect(() => {
@@ -186,17 +186,15 @@ function ConnectPanel() {
                 <span className="hero-rotator-q" key={exIdx}>{HERO_EXAMPLES[exIdx]}</span>
             </div>
             <p className="hero-sub">
-                Open a YES/NO market, friends stake TAIKO, an AI agent settles it after the deadline.
-                No app, no signup, no opinions.
+                Sign in with Google or email — no wallet needed. Open a YES/NO market,
+                friends stake TAIKO, an AI agent settles it after the deadline.
             </p>
             <button
                 className="primary lg hero-cta"
-                onClick={() => injected && connect({connector: injected})}
-                disabled={isPending}
+                onClick={() => open()}
             >
-                {isPending ? "Connecting…" : "Connect wallet to open a bet"}
+                Sign in to open a bet
             </button>
-            {error && <p className="error-text">{error.message}</p>}
             <div className="hero-howto">
                 <span className="hero-step"><span className="hero-step-num">1</span> ask the question</span>
                 <span className="hero-step"><span className="hero-step-num">2</span> friends stake</span>
