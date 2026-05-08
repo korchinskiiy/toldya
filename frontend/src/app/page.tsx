@@ -125,9 +125,9 @@ function Topbar() {
                 <span className="brand">toldya</span>
             </div>
             <div className="row topbar-actions">
-                <span className={`badge ${chainOk ? "live" : "no"}`}>
-                    {chainOk ? ALLOWED_CHAIN.name : `chain ${chainId} (wrong!)`}
-                </span>
+                {!chainOk && isConnected && (
+                    <span className="badge no">chain {chainId} (wrong)</span>
+                )}
                 {isConnected && address && (
                     <>
                         {balance !== undefined && (
@@ -157,49 +157,23 @@ function Topbar() {
 // Connect / switch panels
 // ---------------------------------------------------------------------
 
-const HERO_EXAMPLES = [
-    "Will Tom finish a beer in 30 seconds?",
-    "Does Marco actually own that Lambo?",
-    "Will Anna text her ex before Saturday?",
-    "Will it rain on the wedding?",
-    "Will the band book the Berlin gig?",
-    "Will I beat my dad at chess by Christmas?",
-];
-
 function ConnectPanel() {
     const {open} = useAppKit();
 
-    const [exIdx, setExIdx] = useState(0);
-    useEffect(() => {
-        const t = setInterval(() => setExIdx((i) => (i + 1) % HERO_EXAMPLES.length), 2800);
-        return () => clearInterval(t);
-    }, []);
-
     return (
         <div className="hero-panel">
-            <div className="hero-eyebrow">peer-to-peer · onchain · friends only</div>
             <h1 className="hero-title">
                 Settle the bet.<br />
                 Skip the argument.
             </h1>
-            <div className="hero-rotator" aria-live="polite">
-                <span className="hero-rotator-q" key={exIdx}>{HERO_EXAMPLES[exIdx]}</span>
-            </div>
             <p className="hero-sub">
-                Sign in with Google or email — no wallet needed. Open a YES/NO market,
-                friends stake TAIKO, an AI agent settles it after the deadline.
+                Sign in with Google or email. Open a YES/NO market, friends stake,
+                an AI agent settles it.
             </p>
-            <button
-                className="primary lg hero-cta"
-                onClick={() => open()}
-            >
-                Sign in to open a bet
+            <button className="primary lg hero-cta" onClick={() => open()}>
+                Sign in
             </button>
-            <div className="hero-howto">
-                <span className="hero-step"><span className="hero-step-num">1</span> ask the question</span>
-                <span className="hero-step"><span className="hero-step-num">2</span> friends stake</span>
-                <span className="hero-step"><span className="hero-step-num">3</span> winner takes the pot</span>
-            </div>
+            <p className="hero-foot">No wallet needed · Built on Taiko</p>
         </div>
     );
 }
@@ -1279,23 +1253,17 @@ function ActivityFeed() {
 
 function DeploymentInfo() {
     return (
-        <div style={{marginTop: "3rem", padding: "1rem", borderTop: "1px solid var(--border)", fontSize: "0.75rem"}}>
-            <div className="muted">
-                <div>chain: <strong>{ALLOWED_CHAIN.name}</strong> ({ALLOWED_CHAIN.id})</div>
-                <div>
-                    hub:{" "}
-                    <a href={`${EXPLORER}/address/${HUB_ADDRESS}`} target="_blank" rel="noreferrer" style={{fontFamily: "monospace"}}>
-                        {HUB_ADDRESS}
-                    </a>
-                </div>
-                <div>
-                    token:{" "}
-                    <a href={`${EXPLORER}/address/${TOKEN_ADDRESS}`} target="_blank" rel="noreferrer" style={{fontFamily: "monospace"}}>
-                        {TOKEN_ADDRESS}
-                    </a>
-                </div>
-            </div>
-        </div>
+        <footer className="site-foot">
+            <span>Built on {ALLOWED_CHAIN.name}</span>
+            <span className="dot">·</span>
+            <a href={`${EXPLORER}/address/${HUB_ADDRESS}`} target="_blank" rel="noreferrer">
+                Contract
+            </a>
+            <span className="dot">·</span>
+            <a href="https://github.com/Pigitaiko/toldya" target="_blank" rel="noreferrer">
+                Source
+            </a>
+        </footer>
     );
 }
 
