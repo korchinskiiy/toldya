@@ -11,7 +11,7 @@ import {
 } from "react-native";
 import {createPublicClient, http} from "viem";
 import {useAccount} from "wagmi";
-import {AppKit, AppKitButton, useAppKit} from "@reown/appkit-react-native";
+import {AppKit, AppKitButton, useAppKit} from "../components/WalletGate";
 import {ALLOWED_CHAIN, HUB_ADDRESS} from "../lib/chain";
 import {hubAbi} from "../lib/contracts";
 import {deadlineLabel, formatTaiko} from "../lib/format";
