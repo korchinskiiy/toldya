@@ -605,7 +605,9 @@ function MarketCard({market, viewer, onChange}: {market: Market; viewer: `0x${st
     const noPct = 100 - yesPct;
     const past = Number(market.deadline) * 1000 < Date.now();
     const isOpen = market.status === 0;
-    const needsResolution = isOpen && past;
+    // Voting is allowed any time after the market is open — stakers can settle
+    // early when they all agree. The deadline only matters for AI-oracle escalation.
+    const showVerdict = isOpen;
     const resolved = market.status >= 2;
     const userYes = (yesStake as bigint | undefined) ?? 0n;
     const userNo = (noStake as bigint | undefined) ?? 0n;
@@ -889,10 +891,11 @@ function MarketCard({market, viewer, onChange}: {market: Market; viewer: `0x${st
                         </p>
                     )}
 
-                    {needsResolution && (
+                    {showVerdict && (
                         <ResolutionPanel
                             marketId={market.id}
                             oracleEnabled={market.oracleEnabled}
+                            past={past}
                             viewer={viewer}
                             stakers={stakerList}
                             isStaker={Boolean(viewer && stakerList.map((a) => a.toLowerCase()).includes(viewer.toLowerCase()))}
@@ -947,6 +950,7 @@ function MarketCard({market, viewer, onChange}: {market: Market; viewer: `0x${st
 function ResolutionPanel({
     marketId,
     oracleEnabled,
+    past,
     viewer,
     stakers,
     isStaker,
@@ -958,6 +962,7 @@ function ResolutionPanel({
 }: {
     marketId: bigint;
     oracleEnabled: boolean;
+    past: boolean;
     viewer?: `0x${string}`;
     stakers: readonly `0x${string}`[];
     isStaker: boolean;
@@ -969,8 +974,12 @@ function ResolutionPanel({
 }) {
     return (
         <div className="verdict">
-            <div className="verdict-eyebrow">Awaiting verdict · deadline passed</div>
-            <h4 className="verdict-title">Time for a verdict.</h4>
+            <div className="verdict-eyebrow">
+                {past ? "Awaiting verdict · deadline passed" : "Settle early — bettors agree"}
+            </div>
+            <h4 className="verdict-title">
+                {past ? "Time for a verdict." : "Already know the answer?"}
+            </h4>
 
             <div className="verdict-step">
                 <div className="verdict-step-h">
@@ -1011,7 +1020,7 @@ function ResolutionPanel({
                 )}
             </div>
 
-            {oracleEnabled && (
+            {oracleEnabled && past && (
                 <div className="escalate-aside">
                     <div className="escalate-h">If you can't agree…</div>
                     <p>Anyone can hand it to the AI oracle to read the criteria and decide.</p>

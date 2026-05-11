@@ -303,11 +303,21 @@ contract ToldyaHubTest is Test {
     // Mutual resolution (vote)
     // -----------------------------------------------------------------
 
-    function test_voteResolution_revertsBeforeDeadline() public {
+    function test_voteResolution_worksBeforeDeadline() public {
+        // Early settlement: stakers can vote any time, deadline is irrelevant
+        // as long as they all agree.
         uint256 id = _create(rob, ToldyaHub.Side.No, 100 ether);
-        vm.expectRevert(ToldyaHub.DeadlineNotReached.selector);
+        vm.prank(tom);
+        hub.stake(id, ToldyaHub.Side.Yes, 50 ether);
+
+        // No warp — well before deadline.
         vm.prank(rob);
         hub.voteResolution(id, true);
+        assertEq(uint256(hub.getMarket(id).status), uint256(ToldyaHub.Status.Open));
+
+        vm.prank(tom);
+        hub.voteResolution(id, true);
+        assertEq(uint256(hub.getMarket(id).status), uint256(ToldyaHub.Status.ResolvedYes));
     }
 
     function test_voteResolution_revertsIfNotStaker() public {

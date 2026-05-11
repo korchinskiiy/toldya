@@ -212,15 +212,15 @@ contract ToldyaHub is ReentrancyGuard, Ownable {
         emit ResolutionRequested(marketId, m.question, m.criteria);
     }
 
-    /// @notice Mutual resolution path: any staker can vote on the outcome after
-    ///         the deadline. If every staker has voted and they all agree, the
-    ///         market resolves immediately — no oracle needed. If they disagree,
-    ///         the market stays Open and anyone can fall back to the oracle path
-    ///         via triggerResolution().
+    /// @notice Mutual resolution path: any staker can vote on the outcome at any
+    ///         time — before or after the deadline. If every staker has voted and
+    ///         they all agree, the market resolves immediately, no oracle needed.
+    ///         The deadline only gates oracle escalation (triggerResolution), not
+    ///         staker voting, so friend bets can settle the moment everyone knows
+    ///         the answer.
     function voteResolution(uint256 marketId, bool yesWon) external {
         Market storage m = markets[marketId];
         if (m.status != Status.Open) revert MarketNotOpen();
-        if (block.timestamp < m.deadline) revert DeadlineNotReached();
         if (!hasStaked[marketId][msg.sender]) revert NotAStaker();
 
         resolutionVote[marketId][msg.sender] = yesWon ? 1 : 2;
