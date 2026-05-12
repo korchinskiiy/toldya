@@ -733,6 +733,9 @@ function MarketCard({market, viewer, onChange}: {market: Market; viewer: `0x${st
     // early when they all agree. The deadline only matters for AI-oracle escalation.
     const showVerdict = isOpen;
     const resolved = market.status >= 2;
+    const isStaker = Boolean(
+        viewer && stakerList.map((a) => a.toLowerCase()).includes(viewer.toLowerCase()),
+    );
     const userYes = (yesStake as bigint | undefined) ?? 0n;
     const userNo = (noStake as bigint | undefined) ?? 0n;
     const userClaim = (claimable as bigint | undefined) ?? 0n;
@@ -976,7 +979,16 @@ function MarketCard({market, viewer, onChange}: {market: Market; viewer: `0x${st
             <div className="mc-foot">
                 <span>{stakerList.length} {stakerList.length === 1 ? "bettor" : "bettors"}</span>
                 <div className="row" style={{gap: "0.4rem"}}>
-                    {viewer && isOpen && !past && (
+                    {viewer && isOpen && isStaker && (
+                        <button
+                            className="yes sm"
+                            onClick={() => setExpanded(true)}
+                            title="Vote to settle the bet now"
+                        >
+                            Settle ↓
+                        </button>
+                    )}
+                    {viewer && isOpen && !past && !isStaker && (
                         <button className="primary sm" onClick={() => setBetOpen(true)}>
                             place a bet →
                         </button>
@@ -1022,7 +1034,7 @@ function MarketCard({market, viewer, onChange}: {market: Market; viewer: `0x${st
                             past={past}
                             viewer={viewer}
                             stakers={stakerList}
-                            isStaker={Boolean(viewer && stakerList.map((a) => a.toLowerCase()).includes(viewer.toLowerCase()))}
+                            isStaker={isStaker}
                             busy={busy}
                             onVote={castVote}
                             onTrigger={trigger}
