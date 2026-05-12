@@ -231,6 +231,19 @@ form > label:first-of-type {
     gap: 1rem;
 }
 
+.brand-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.7rem;
+    color: var(--text) !important;
+    text-decoration: none;
+    cursor: pointer;
+    transition: opacity 140ms ease;
+}
+.brand-link:hover {
+    opacity: 0.75;
+}
+
 .brand {
     font-size: 1.45rem;
     font-weight: 700;

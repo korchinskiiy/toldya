@@ -1,4 +1,4 @@
-import {useCallback, useEffect, useState} from "react";
+import {useCallback, useEffect, useRef, useState} from "react";
 import {
     SafeAreaView,
     View,
@@ -34,6 +34,12 @@ export function HomeScreen() {
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
     const [createOpen, setCreateOpen] = useState(false);
+    const scrollRef = useRef<ScrollView | null>(null);
+
+    function goHome() {
+        scrollRef.current?.scrollTo({y: 0, animated: true});
+        refresh();
+    }
 
     const loadMarkets = useCallback(async () => {
         try {
@@ -77,14 +83,21 @@ export function HomeScreen() {
         <SafeAreaView style={styles.safe}>
             <StatusBar barStyle="dark-content" />
             <View style={styles.header}>
-                <View style={styles.brandRow}>
+                <Pressable
+                    style={styles.brandRow}
+                    onPress={goHome}
+                    accessibilityRole="button"
+                    accessibilityLabel="Home"
+                    hitSlop={8}
+                >
                     <View style={styles.brandDot} />
                     <Text style={styles.brand}>toldya</Text>
-                </View>
+                </Pressable>
                 <AppKitButton balance="show" />
             </View>
 
             <ScrollView
+                ref={scrollRef}
                 contentContainerStyle={styles.scroll}
                 refreshControl={
                     <RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={colors.accent} />

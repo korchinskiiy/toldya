@@ -137,12 +137,22 @@ function Topbar() {
         query: {enabled: Boolean(address), refetchInterval: 12000},
     });
 
+    function goHome(e: React.MouseEvent) {
+        e.preventDefault();
+        // Clear deep-link hash, scroll to top, refresh market list.
+        if (window.location.hash) {
+            history.replaceState(null, "", window.location.pathname + window.location.search);
+        }
+        window.scrollTo({top: 0, behavior: "smooth"});
+        window.dispatchEvent(new Event("toldya:refresh"));
+    }
+
     return (
         <header className="header">
-            <div className="row" style={{gap: "0.7rem"}}>
+            <a href="/" onClick={goHome} className="brand-link" aria-label="Home">
                 <span className="brand-dot" />
                 <span className="brand">toldya</span>
-            </div>
+            </a>
             <div className="row topbar-actions">
                 {!chainOk && isConnected && (
                     <span className="badge no">chain {chainId} (wrong)</span>
