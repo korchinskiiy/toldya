@@ -1,7 +1,7 @@
 "use client";
 
 import {useEffect, useState} from "react";
-import {useAccount, useChainId, usePublicClient, useReadContract, useSwitchChain, useWriteContract} from "wagmi";
+import {useAccount, useBalance, useChainId, usePublicClient, useReadContract, useSwitchChain, useWriteContract} from "wagmi";
 import {useAppKit} from "@reown/appkit/react";
 import {ALLOWED_CHAIN} from "@/lib/wagmi";
 import {HUB_ADDRESS, TOKEN_ADDRESS, erc20Abi, hubAbi} from "@/lib/contracts";
@@ -41,6 +41,25 @@ type Market = {
 };
 
 const STATUS_LABEL = ["Live", "Resolving", "YES won", "NO won", "Voided"];
+
+/**
+ * Translate raw wallet/RPC errors into something a user can act on. Most of
+ * the day-1 failures are "no gas" — and the default error wording is opaque,
+ * so we surface a friendlier message that points back at the onboarding panel.
+ */
+function friendlyError(e: unknown, fallback: string): string {
+    const raw = e instanceof Error ? e.message : "";
+    const first = raw.split("\n")[0] || fallback;
+    if (
+        /insufficient funds|exceeds the balance|cannot estimate gas/i.test(raw)
+    ) {
+        return "You're out of Hoodi ETH for gas. Top up via the faucet above.";
+    }
+    if (/user rejected|user denied/i.test(raw)) {
+        return "Cancelled in your wallet.";
+    }
+    return first;
+}
 
 function Confetti() {
     const pieces = Array.from({length: 60});
@@ -84,7 +103,7 @@ export default function Home() {
             {isConnected && !onRightChain && <SwitchPanel />}
             {isConnected && onRightChain && (
                 <>
-                    <FaucetPanel address={address!} />
+                    <OnboardingPanel address={address!} />
                     <CreatePanel />
                 </>
             )}
@@ -204,11 +223,42 @@ function SwitchPanel() {
 // Faucet panel
 // ---------------------------------------------------------------------
 
-function FaucetPanel({address}: {address: `0x${string}`}) {
+const GAS_FAUCET_URL =
+    process.env.NEXT_PUBLIC_GAS_FAUCET_URL ?? "https://hoodi.ethpandaops.io/";
+
+// Anything below 0.001 Hoodi ETH is effectively zero — not enough for one
+// approve + one stake transaction. Used to decide whether to show the gas step.
+const MIN_GAS_WEI = 1_000_000_000_000_000n;
+
+function OnboardingPanel({address}: {address: `0x${string}`}) {
     const client = usePublicClient();
     const {writeContractAsync} = useWriteContract();
     const [busy, setBusy] = useState(false);
     const [err, setErr] = useState<string | null>(null);
+    const [copied, setCopied] = useState(false);
+
+    const {data: ethBalance, refetch: refetchEth} = useBalance({
+        chainId: ALLOWED_CHAIN.id,
+        address,
+        query: {refetchInterval: 12_000},
+    });
+
+    const {data: tokenBalance, refetch: refetchToken} = useReadContract({
+        chainId: ALLOWED_CHAIN.id,
+        address: TOKEN_ADDRESS,
+        abi: erc20Abi,
+        functionName: "balanceOf",
+        args: [address],
+        query: {refetchInterval: 12_000},
+    });
+
+    const ethWei = ethBalance?.value ?? 0n;
+    const tokWei = (tokenBalance as bigint | undefined) ?? 0n;
+    const needsGas = ethWei < MIN_GAS_WEI;
+    const needsTokens = tokWei < MIN_GAS_WEI;
+
+    // Quietly disappear once the user is set up — no need to nag.
+    if (!needsGas && !needsTokens) return null;
 
     async function mint() {
         if (!client) return;
@@ -223,20 +273,94 @@ function FaucetPanel({address}: {address: `0x${string}`}) {
                 args: [address, FAUCET_AMOUNT],
             });
             await client.waitForTransactionReceipt({hash});
+            await refetchToken();
         } catch (e) {
-            setErr(e instanceof Error ? e.message.split("\n")[0] : "mint failed");
+            const msg = e instanceof Error ? e.message.split("\n")[0] : "mint failed";
+            // Most common cause: no gas. Make the fix obvious.
+            if (/insufficient funds|exceeds the balance/i.test(msg)) {
+                setErr("You need Hoodi ETH for gas before minting. Use the faucet above.");
+            } else {
+                setErr(msg);
+            }
         } finally {
             setBusy(false);
         }
     }
 
+    async function copyAddress() {
+        try {
+            await navigator.clipboard.writeText(address);
+            setCopied(true);
+            setTimeout(() => setCopied(false), 1500);
+        } catch {
+            // Clipboard may be blocked — user can long-press the address instead.
+        }
+    }
+
     return (
-        <div className="faucet-slim">
-            <span>Need test tokens?</span>
-            <button onClick={mint} disabled={busy}>
-                {busy ? "Minting…" : "+ 1000 mTAIKO"}
-            </button>
-            {err && <span className="error-text" style={{margin: 0}}>{err}</span>}
+        <div className="onboard">
+            <div className="onboard-h">One-time setup</div>
+            <p className="onboard-sub">
+                You'll need a tiny bit of Hoodi ETH for gas and some mTAIKO to stake.
+                Free, test-only — takes 30 seconds.
+            </p>
+
+            <div className={`onboard-step ${!needsGas ? "onboard-step-done" : ""}`}>
+                <div className="onboard-step-num">{needsGas ? "1" : "✓"}</div>
+                <div className="onboard-step-body">
+                    <div className="onboard-step-title">Gas — Hoodi ETH</div>
+                    <div className="onboard-step-sub">
+                        Balance: <strong>{ethBalance ? Number(ethBalance.formatted).toFixed(5) : "…"} ETH</strong>
+                    </div>
+                    {needsGas && (
+                        <>
+                            <div className="row" style={{gap: "0.4rem", marginTop: "0.6rem", flexWrap: "wrap"}}>
+                                <a
+                                    className="btn primary sm"
+                                    href={GAS_FAUCET_URL}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                >
+                                    Open faucet ↗
+                                </a>
+                                <button className="sm" onClick={copyAddress} title="Copy your wallet address for the faucet form">
+                                    {copied ? "Copied!" : "Copy my address"}
+                                </button>
+                                <button className="ghost sm" onClick={() => refetchEth()}>
+                                    Recheck
+                                </button>
+                            </div>
+                            <div className="onboard-tip">
+                                Paste your address into the faucet, request ETH, wait ~30s, then click "Recheck".
+                            </div>
+                        </>
+                    )}
+                </div>
+            </div>
+
+            <div className={`onboard-step ${!needsTokens ? "onboard-step-done" : ""}`}>
+                <div className="onboard-step-num">{needsTokens ? "2" : "✓"}</div>
+                <div className="onboard-step-body">
+                    <div className="onboard-step-title">Stake token — mTAIKO</div>
+                    <div className="onboard-step-sub">
+                        Balance: <strong>{formatTaiko(tokWei)} mTAIKO</strong>
+                    </div>
+                    {needsTokens && (
+                        <div className="row" style={{gap: "0.4rem", marginTop: "0.6rem"}}>
+                            <button
+                                className="primary sm"
+                                onClick={mint}
+                                disabled={busy || needsGas}
+                                title={needsGas ? "Get gas first" : ""}
+                            >
+                                {busy ? "Minting…" : "+ 1000 mTAIKO"}
+                            </button>
+                        </div>
+                    )}
+                </div>
+            </div>
+
+            {err && <p className="error-text" style={{marginTop: "0.8rem"}}>{err}</p>}
         </div>
     );
 }
@@ -313,7 +437,7 @@ function CreatePanel() {
             // Force the market list to refresh
             window.dispatchEvent(new Event("toldya:refresh"));
         } catch (e) {
-            setErr(e instanceof Error ? e.message.split("\n")[0] : "failed");
+            setErr(friendlyError(e, "failed"));
         } finally {
             setBusy(false);
             setStage("");
@@ -653,7 +777,7 @@ function MarketCard({market, viewer, onChange}: {market: Market; viewer: `0x${st
             setBetOpen(false);
             onChange();
         } catch (e) {
-            setErr(e instanceof Error ? e.message.split("\n")[0] : "bet failed");
+            setErr(friendlyError(e, "bet failed"));
         } finally {
             setBusy(false);
         }
@@ -676,7 +800,7 @@ function MarketCard({market, viewer, onChange}: {market: Market; viewer: `0x${st
             await client.waitForTransactionReceipt({hash});
             onChange();
         } catch (e) {
-            setErr(e instanceof Error ? e.message.split("\n")[0] : "trigger failed");
+            setErr(friendlyError(e, "trigger failed"));
         } finally {
             setBusy(false);
         }
@@ -700,7 +824,7 @@ function MarketCard({market, viewer, onChange}: {market: Market; viewer: `0x${st
             await refetchStakers();
             onChange();
         } catch (e) {
-            setErr(e instanceof Error ? e.message.split("\n")[0] : "vote failed");
+            setErr(friendlyError(e, "vote failed"));
         } finally {
             setBusy(false);
         }
@@ -723,7 +847,7 @@ function MarketCard({market, viewer, onChange}: {market: Market; viewer: `0x${st
             await client.waitForTransactionReceipt({hash});
             onChange();
         } catch (e) {
-            setErr(e instanceof Error ? e.message.split("\n")[0] : "resolve failed");
+            setErr(friendlyError(e, "resolve failed"));
         } finally {
             setBusy(false);
         }
@@ -748,7 +872,7 @@ function MarketCard({market, viewer, onChange}: {market: Market; viewer: `0x${st
             setTimeout(() => setCelebrate(false), 2500);
             onChange();
         } catch (e) {
-            setErr(e instanceof Error ? e.message.split("\n")[0] : "claim failed");
+            setErr(friendlyError(e, "claim failed"));
         } finally {
             setBusy(false);
         }

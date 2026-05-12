@@ -693,6 +693,77 @@ input[type="file"]::file-selector-button:hover {
     background: var(--bg-hover);
 }
 
+/* ---------- Onboarding panel ---------- */
+
+.onboard {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 1.4rem 1.5rem;
+    margin-bottom: 1.2rem;
+    box-shadow: var(--shadow-card);
+}
+.onboard-h {
+    font-size: 0.95rem;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    margin-bottom: 0.3rem;
+}
+.onboard-sub {
+    color: var(--text-muted);
+    font-size: 0.9rem;
+    margin: 0 0 1.1rem;
+    line-height: 1.45;
+}
+.onboard-step {
+    display: flex;
+    gap: 0.85rem;
+    padding: 0.9rem 0;
+    border-top: 1px solid var(--border);
+}
+.onboard-step-num {
+    flex-shrink: 0;
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    background: var(--accent-bg);
+    color: var(--accent);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.85rem;
+    font-weight: 700;
+    margin-top: 1px;
+}
+.onboard-step-done .onboard-step-num {
+    background: rgba(217, 119, 6, 0.16);
+    color: var(--accent);
+}
+.onboard-step-body {
+    flex: 1;
+    min-width: 0;
+}
+.onboard-step-title {
+    font-weight: 600;
+    font-size: 0.98rem;
+    color: var(--text);
+}
+.onboard-step-sub {
+    color: var(--text-muted);
+    font-size: 0.85rem;
+    margin-top: 0.2rem;
+    font-variant-numeric: tabular-nums;
+}
+.onboard-tip {
+    color: var(--text-faint);
+    font-size: 0.78rem;
+    margin-top: 0.55rem;
+    line-height: 1.45;
+}
+.onboard a.btn.primary {
+    color: #fff;
+}
+
 /* ---------- Faucet slim ---------- */
 
 .faucet-slim {
