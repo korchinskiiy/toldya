@@ -534,15 +534,21 @@ form > label:first-of-type {
 /* ---------- Event card (feed) ---------- */
 
 .event-card {
+    display: block;
     background: var(--bg-elevated);
     border: 1px solid var(--border);
     border-radius: var(--radius-lg);
     padding: 1.1rem 1.3rem;
     margin-bottom: 0.7rem;
-    transition: border-color 140ms ease;
+    color: var(--text) !important;
+    text-decoration: none;
+    cursor: pointer;
+    transition: border-color 140ms ease, background 140ms ease, transform 140ms ease;
 }
 .event-card:hover {
     border-color: var(--border-strong);
+    background: var(--bg-hover);
+    transform: translateY(-1px);
 }
 .event-head {
     display: flex;

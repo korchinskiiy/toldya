@@ -76,8 +76,22 @@ export function EventCard({event}: {event: FeedEvent}) {
             break;
     }
 
+    const href = `#market-${event.marketId.toString()}`;
+
+    function onClick(e: React.MouseEvent) {
+        // Same-hash clicks don't fire hashchange, so the market card wouldn't
+        // re-expand on a second click. Force-dispatch our refocus event so
+        // clicking the same activity item always scrolls back to it.
+        e.preventDefault();
+        if (window.location.hash === href) {
+            window.dispatchEvent(new CustomEvent("toldya:refocus"));
+        } else {
+            window.location.hash = href;
+        }
+    }
+
     return (
-        <article className="event-card">
+        <a href={href} className="event-card" onClick={onClick}>
             <div className="event-head">
                 <div className="event-actor">
                     {actor ? (
@@ -94,6 +108,6 @@ export function EventCard({event}: {event: FeedEvent}) {
                 </span>
             </div>
             <span className="event-question">{event.question}</span>
-        </article>
+        </a>
     );
 }

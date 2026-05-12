@@ -1,6 +1,6 @@
 "use client";
 
-import {useEffect, useState} from "react";
+import {useEffect, useRef, useState} from "react";
 import {useAccount, useBalance, useChainId, usePublicClient, useReadContract, useSwitchChain, useWriteContract} from "wagmi";
 import {useAppKit} from "@reown/appkit/react";
 import {ALLOWED_CHAIN} from "@/lib/wagmi";
@@ -914,8 +914,38 @@ function MarketCard({market, viewer, onChange}: {market: Market; viewer: `0x${st
         }
     }, [market.id, market.status]);
 
+    // Deep-link focus: when the URL hash matches this market (e.g. from an
+    // activity-feed click), expand the card and scroll it into view. Listens
+    // for both the initial mount and subsequent hashchange / refocus events
+    // so clicking the same activity item twice re-scrolls.
+    const articleRef = useRef<HTMLElement | null>(null);
+    useEffect(() => {
+        if (typeof window === "undefined") return;
+        const target = `#market-${market.id.toString()}`;
+        function focusIfMatch() {
+            if (window.location.hash !== target) return;
+            setExpanded(true);
+            // Defer so the expanded content has laid out before we scroll.
+            requestAnimationFrame(() => {
+                articleRef.current?.scrollIntoView({behavior: "smooth", block: "start"});
+            });
+        }
+        focusIfMatch();
+        window.addEventListener("hashchange", focusIfMatch);
+        window.addEventListener("toldya:refocus", focusIfMatch);
+        return () => {
+            window.removeEventListener("hashchange", focusIfMatch);
+            window.removeEventListener("toldya:refocus", focusIfMatch);
+        };
+    }, [market.id]);
+
     return (
-        <article className={`mc ${leadClass}`}>
+        <article
+            ref={articleRef}
+            id={`market-${market.id.toString()}`}
+            className={`mc ${leadClass}`}
+            style={{scrollMarginTop: "1rem"}}
+        >
             {celebrate && <Confetti />}
             {market.status === 2 && (
                 <div className="mc-banner mc-banner-yes">
