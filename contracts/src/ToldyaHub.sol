@@ -4,6 +4,7 @@ pragma solidity ^0.8.26;
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 
 /// @title ToldyaHub
@@ -12,7 +13,7 @@ import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 ///         deadline passes an AI oracle resolves the outcome and the winning pool
 ///         splits the entire pot pro-rata to net stake. If only one side has any
 ///         stake at resolution, the market is voided and stakers are refunded.
-contract ToldyaHub is ReentrancyGuard, Ownable {
+contract ToldyaHub is ReentrancyGuard, Ownable, Pausable {
     using SafeERC20 for IERC20;
 
     enum Side {
@@ -53,6 +54,13 @@ contract ToldyaHub is ReentrancyGuard, Ownable {
     uint256 public constant BPS_DENOM = 10_000;
     uint256 public constant MIN_STAKE = 1e15; // 0.001 token, prevents dust spam
 
+    /// @notice After `deadline + RESOLUTION_TIMEOUT`, anyone can void a market
+    ///         that hasn't settled (stakers couldn't agree, oracle didn't
+    ///         respond, etc.) so participants can recover their funds. This is
+    ///         the escape hatch for stuck markets — without it, an unresponsive
+    ///         oracle or one stubborn voter would lock funds forever.
+    uint256 public constant RESOLUTION_TIMEOUT = 14 days;
+
     IERC20 public immutable stakeToken;
     address public oracle;
     address public treasury;
@@ -65,9 +73,14 @@ contract ToldyaHub is ReentrancyGuard, Ownable {
 
     // Mutual-resolution state: track unique stakers per market and their votes.
     // 0 = no vote, 1 = YES, 2 = NO.
+    // yesVotes/noVotes are incremental counters so voteResolution stays O(1).
+    // The previous implementation iterated every staker to check unanimity,
+    // which could DoS if many addresses staked (gas exhaustion).
     mapping(uint256 => address[]) internal _stakers;
     mapping(uint256 => mapping(address => bool)) public hasStaked;
     mapping(uint256 => mapping(address => uint8)) public resolutionVote;
+    mapping(uint256 => uint256) public yesVotes;
+    mapping(uint256 => uint256) public noVotes;
 
     event MarketCreated(
         uint256 indexed marketId,
@@ -108,6 +121,8 @@ contract ToldyaHub is ReentrancyGuard, Ownable {
     error EmptyEvidence();
     error NotAStaker();
     error OracleDisabled();
+    error StalemateNotReached();
+    error MarketNotStuck();
 
     constructor(IERC20 _stakeToken, address _oracle, address _treasury) Ownable(msg.sender) {
         stakeToken = _stakeToken;
@@ -129,6 +144,18 @@ contract ToldyaHub is ReentrancyGuard, Ownable {
         emit TreasuryUpdated(_treasury);
     }
 
+    /// @notice Pause new market creation and staking. Claims, voting, evidence
+    ///         submission, and oracle resolution remain available so users can
+    ///         always exit existing positions even during a pause. Intended for
+    ///         emergency response to discovered vulnerabilities.
+    function pause() external onlyOwner {
+        _pause();
+    }
+
+    function unpause() external onlyOwner {
+        _unpause();
+    }
+
     // -------------------------------------------------------------------------
     // Market lifecycle
     // -------------------------------------------------------------------------
@@ -144,7 +171,7 @@ contract ToldyaHub is ReentrancyGuard, Ownable {
         Side side,
         uint256 amount,
         bool oracleEnabled
-    ) external nonReentrant returns (uint256 marketId) {
+    ) external nonReentrant whenNotPaused returns (uint256 marketId) {
         if (bytes(question).length == 0) revert EmptyQuestion();
         if (deadline <= block.timestamp) revert InvalidDeadline();
         if (amount < MIN_STAKE) revert StakeTooSmall();
@@ -172,7 +199,7 @@ contract ToldyaHub is ReentrancyGuard, Ownable {
     }
 
     /// @notice Stake TAIKO on YES or NO for an open market.
-    function stake(uint256 marketId, Side side, uint256 amount) external nonReentrant {
+    function stake(uint256 marketId, Side side, uint256 amount) external nonReentrant whenNotPaused {
         Market storage m = markets[marketId];
         if (m.status != Status.Open) revert MarketNotOpen();
         if (block.timestamp >= m.deadline) revert DeadlinePassed();
@@ -218,25 +245,55 @@ contract ToldyaHub is ReentrancyGuard, Ownable {
     ///         The deadline only gates oracle escalation (triggerResolution), not
     ///         staker voting, so friend bets can settle the moment everyone knows
     ///         the answer.
+    /// @dev    Uses O(1) yesVotes/noVotes counters so this function stays cheap
+    ///         even if a market has many stakers (the prior loop-over-stakers
+    ///         implementation was DoS-able by dust-staking many addresses).
     function voteResolution(uint256 marketId, bool yesWon) external {
         Market storage m = markets[marketId];
         if (m.status != Status.Open) revert MarketNotOpen();
         if (!hasStaked[marketId][msg.sender]) revert NotAStaker();
 
-        resolutionVote[marketId][msg.sender] = yesWon ? 1 : 2;
-        emit ResolutionVoted(marketId, msg.sender, yesWon);
+        uint8 prev = resolutionVote[marketId][msg.sender];
+        uint8 next = yesWon ? 1 : 2;
 
-        // Check if all stakers have voted unanimously.
-        address[] storage s = _stakers[marketId];
-        uint8 first = resolutionVote[marketId][s[0]];
-        if (first == 0) return;
-        for (uint256 i = 1; i < s.length; i++) {
-            if (resolutionVote[marketId][s[i]] != first) return;
+        if (prev != next) {
+            if (prev == 1) yesVotes[marketId]--;
+            else if (prev == 2) noVotes[marketId]--;
+
+            if (next == 1) yesVotes[marketId]++;
+            else noVotes[marketId]++;
+
+            resolutionVote[marketId][msg.sender] = next;
         }
 
-        // Unanimous → resolve.
-        m.status = first == 1 ? Status.ResolvedYes : Status.ResolvedNo;
-        emit MarketResolved(marketId, m.status);
+        emit ResolutionVoted(marketId, msg.sender, yesWon);
+
+        uint256 total = _stakers[marketId].length;
+        if (yesVotes[marketId] == total) {
+            m.status = Status.ResolvedYes;
+            emit MarketResolved(marketId, Status.ResolvedYes);
+        } else if (noVotes[marketId] == total) {
+            m.status = Status.ResolvedNo;
+            emit MarketResolved(marketId, Status.ResolvedNo);
+        }
+    }
+
+    /// @notice Escape hatch for stuck markets. Anyone can void a market that
+    ///         hasn't settled within RESOLUTION_TIMEOUT of its deadline,
+    ///         allowing stakers to recover their funds via claim(). Covers
+    ///         two failure modes:
+    ///           - Stakers can't agree and oracle is disabled → deadlock.
+    ///           - Oracle was enabled and triggered but never responded.
+    function voidStalemate(uint256 marketId) external {
+        Market storage m = markets[marketId];
+        if (m.status != Status.Open && m.status != Status.ResolutionRequested) {
+            revert MarketNotStuck();
+        }
+        if (block.timestamp < m.deadline + RESOLUTION_TIMEOUT) {
+            revert StalemateNotReached();
+        }
+        m.status = Status.Voided;
+        emit MarketResolved(marketId, Status.Voided);
     }
 
     /// @notice Submit evidence (an IPFS-style CID pointing at an image/video/audio)
