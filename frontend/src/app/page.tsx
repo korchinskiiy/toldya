@@ -679,6 +679,30 @@ function MarketCard({market, viewer, onChange}: {market: Market; viewer: `0x${st
     const [tx, setTx] = useState<string | null>(null);
     const [err, setErr] = useState<string | null>(null);
     const [celebrate, setCelebrate] = useState(false);
+    const [shareLabel, setShareLabel] = useState<"Share" | "Copied!">("Share");
+
+    async function share() {
+        if (typeof window === "undefined") return;
+        const url = `${window.location.origin}/#market-${market.id.toString()}`;
+        const shareData = {
+            title: "Bet on toldya",
+            text: `“${market.question}” — settle this bet on toldya`,
+            url,
+        };
+        try {
+            // Native share sheet on mobile + supported desktop browsers; falls
+            // back to copying the link so it still works in Chrome/Firefox.
+            if (navigator.share && navigator.canShare && navigator.canShare(shareData)) {
+                await navigator.share(shareData);
+                return;
+            }
+            await navigator.clipboard.writeText(url);
+            setShareLabel("Copied!");
+            setTimeout(() => setShareLabel("Share"), 1500);
+        } catch {
+            // User cancelled the native share, or clipboard was blocked — no-op.
+        }
+    }
 
     const {data: yesStake} = useReadContract({
         chainId: ALLOWED_CHAIN.id,
@@ -1023,6 +1047,9 @@ function MarketCard({market, viewer, onChange}: {market: Market; viewer: `0x${st
                             place a bet →
                         </button>
                     )}
+                    <button className="ghost sm" onClick={share} title="Share this bet">
+                        {shareLabel}
+                    </button>
                     <button className="ghost sm" onClick={() => setExpanded((v) => !v)}>
                         {expanded ? "collapse" : "details"}
                     </button>
