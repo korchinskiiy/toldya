@@ -73,6 +73,23 @@ export const hubAbi = [
         ],
         outputs: [{name: "", type: "uint256"}],
     },
+    {
+        type: "function",
+        name: "getStakers",
+        stateMutability: "view",
+        inputs: [{name: "marketId", type: "uint256"}],
+        outputs: [{name: "", type: "address[]"}],
+    },
+    {
+        type: "function",
+        name: "voteResolution",
+        stateMutability: "nonpayable",
+        inputs: [
+            {name: "marketId", type: "uint256"},
+            {name: "yesWon", type: "bool"},
+        ],
+        outputs: [],
+    },
 ] as const;
 
 export const erc20Abi = [
@@ -91,6 +108,16 @@ export const erc20Abi = [
         name: "balanceOf",
         stateMutability: "view",
         inputs: [{name: "owner", type: "address"}],
+        outputs: [{type: "uint256"}],
+    },
+    {
+        type: "function",
+        name: "allowance",
+        stateMutability: "view",
+        inputs: [
+            {name: "owner", type: "address"},
+            {name: "spender", type: "address"},
+        ],
         outputs: [{type: "uint256"}],
     },
 ] as const;
