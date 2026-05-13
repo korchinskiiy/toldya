@@ -11,6 +11,7 @@ export const runtime = "nodejs";
 const MAX_BODY_BYTES = 8_192;
 const RATE_LIMIT_WINDOW_MS = 10 * 60 * 1000;
 const RATE_LIMIT_MAX = 20;
+const RATE_LIMIT_MAX_ENTRIES = 10_000;
 const SIGNATURE_RE = /^0x[0-9a-fA-F]{130}$/;
 
 const rateLimits = new Map<string, {count: number; resetAt: number}>();
@@ -20,10 +21,20 @@ function getClientIp(req: NextRequest): string {
     return forwardedFor || req.headers.get("x-real-ip") || "unknown";
 }
 
+function sweepExpiredRateLimits(now: number) {
+    for (const [key, value] of rateLimits) {
+        if (value.resetAt > now) continue;
+        rateLimits.delete(key);
+    }
+}
+
 function consumeRateLimit(key: string): boolean {
     const now = Date.now();
+    sweepExpiredRateLimits(now);
+
     const current = rateLimits.get(key);
     if (!current || current.resetAt <= now) {
+        if (rateLimits.size >= RATE_LIMIT_MAX_ENTRIES) return false;
         rateLimits.set(key, {count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS});
         return true;
     }
@@ -32,14 +43,48 @@ function consumeRateLimit(key: string): boolean {
     return true;
 }
 
+async function readLimitedBody(req: NextRequest): Promise<string | null> {
+    const reader = req.body?.getReader();
+    if (!reader) return "";
+
+    const decoder = new TextDecoder();
+    let totalBytes = 0;
+    let text = "";
+
+    while (true) {
+        const {done, value} = await reader.read();
+        if (done) break;
+        totalBytes += value.byteLength;
+        if (totalBytes > MAX_BODY_BYTES) {
+            await reader.cancel().catch(() => {});
+            return null;
+        }
+        text += decoder.decode(value, {stream: true});
+    }
+
+    return text + decoder.decode();
+}
+
 export async function POST(req: NextRequest) {
-    const rawBody = await req.text();
-    if (new TextEncoder().encode(rawBody).length > MAX_BODY_BYTES) {
+    const contentLength = Number(req.headers.get("content-length"));
+    if (Number.isFinite(contentLength) && contentLength > MAX_BODY_BYTES) {
         return NextResponse.json({error: "request body too large"}, {status: 413});
+    }
+
+    const clientIp = getClientIp(req);
+    // Best-effort only in serverless: production should also enforce this with
+    // edge, WAF, or provider-level limits because in-memory state is per isolate.
+    if (!consumeRateLimit(`ip:${clientIp}`)) {
+        return NextResponse.json({error: "rate limit exceeded"}, {status: 429});
     }
 
     if (!process.env.PINATA_JWT) {
         return NextResponse.json({error: "PINATA_JWT not configured"}, {status: 500});
+    }
+
+    const rawBody = await readLimitedBody(req);
+    if (rawBody === null) {
+        return NextResponse.json({error: "request body too large"}, {status: 413});
     }
 
     let body: unknown;
@@ -70,12 +115,6 @@ export async function POST(req: NextRequest) {
 
     const question = (input.question as string).trim();
     const criteria = (input.criteria as string).trim();
-    // Best-effort only in serverless: production should also enforce this with
-    // edge, WAF, or provider-level limits because in-memory state is per isolate.
-    const rateKey = `${getClientIp(req)}:${input.address.toLowerCase()}`;
-    if (!consumeRateLimit(rateKey)) {
-        return NextResponse.json({error: "rate limit exceeded"}, {status: 429});
-    }
 
     const message = buildOracleQuestionPinMessage({question, criteria});
     let verified = false;
@@ -90,6 +129,9 @@ export async function POST(req: NextRequest) {
     }
     if (!verified) {
         return NextResponse.json({error: "bad signature"}, {status: 401});
+    }
+    if (!consumeRateLimit(`address:${input.address.toLowerCase()}`)) {
+        return NextResponse.json({error: "rate limit exceeded"}, {status: 429});
     }
 
     const payload = buildOracleQuestionPayload({
@@ -107,7 +149,8 @@ export async function POST(req: NextRequest) {
     });
 
     if (!res.ok) {
-        return NextResponse.json({error: `Pinata error: ${await res.text()}`}, {status: res.status});
+        console.error("Pinata pinJSONToIPFS failed", {status: res.status, body: await res.text()});
+        return NextResponse.json({error: "pin failed"}, {status: 502});
     }
 
     let out: {IpfsHash?: unknown};
