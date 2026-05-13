@@ -676,6 +676,24 @@ contract ToldyaHubTest is Test {
         assertEq(address(hub.oracle()), address(0xBEEF));
     }
 
+    function test_setOracle_takesEffectOnNextCreateRequest() public {
+        MockOracle newMock = new MockOracle();
+        hub.setOracle(address(newMock));
+
+        uint256 id = _create(rob, ToldyaHub.Side.No, 100 ether);
+        vm.prank(tom);
+        hub.stake(id, ToldyaHub.Side.Yes, 50 ether);
+        vm.warp(block.timestamp + DEADLINE_OFFSET);
+
+        uint256 originalCalls = mockOracle.createRequestCallCount();
+        hub.triggerResolution(id);
+
+        // The original mock must not have been called.
+        assertEq(mockOracle.createRequestCallCount(), originalCalls);
+        // The new mock receives the call.
+        assertEq(newMock.createRequestCallCount(), 1);
+    }
+
     // -----------------------------------------------------------------
     // H1 — O(1) vote counters
     // -----------------------------------------------------------------
