@@ -11,8 +11,12 @@ contract Deploy is Script {
         uint256 pk = vm.envUint("DEPLOYER_PK");
         address deployer = vm.addr(pk);
 
-        // Oracle and treasury default to the deployer if not explicitly set.
-        // They can be rotated later via setOracle / setTreasury on the hub.
+        // Oracle is the address of an IOracle implementation (typically the
+        // Veto proxy on Hoodi). Treasury defaults to the deployer. Both can be
+        // rotated later via setOracle / setTreasury on the hub. Defaulting
+        // oracle to the deployer is convenient for local devnets where a
+        // MockOracle isn't deployed; production deploys MUST set ORACLE_ADDRESS
+        // to the Veto proxy.
         address oracle = vm.envOr("ORACLE_ADDRESS", deployer);
         address treasury = vm.envOr("TREASURY_ADDRESS", deployer);
         address tokenAddr = vm.envOr("STAKE_TOKEN", address(0));
