@@ -36,11 +36,33 @@ contract ToldyaHub is ReentrancyGuard, Ownable, Pausable {
         Text
     }
 
+    /// @notice How wagering works for a given market.
+    /// - Pool: pari-mutuel. Many participants per side; winning pool splits
+    ///   the entire pot pro-rata to net stake.
+    /// - Pair: a single 1-on-1 bet. Creator's stake gets matched by exactly
+    ///   one counterparty of equal net amount; market locks immediately
+    ///   after the match. Winner takes the full 2x (minus fee already paid).
+    enum WagerMode {
+        Pool,
+        Pair
+    }
+
     struct Market {
         address creator;
         uint64 deadline;
         Status status;
         bool oracleEnabled; // creator's choice at market creation
+        WagerMode mode;
+        // minStakers only applies in Pool mode. 0/1 = no minimum; >=2 voids
+        // the market at deadline if fewer unique stakers participated. Pair
+        // is implicitly minStakers = 2 (creator + matcher).
+        uint8 minStakers;
+        // For Pair mode: flipped to true once a counterparty has matched the
+        // creator's stake. Locks the market against further stakes.
+        bool matched;
+        // Access control. true = anyone can stake. false = only addresses
+        // in `allowedStakers[marketId][who]` (plus the creator) can stake.
+        bool isPublic;
         string question;
         string criteria;
         uint256 yesPool; // sum of net (post-fee) YES stakes
@@ -82,6 +104,11 @@ contract ToldyaHub is ReentrancyGuard, Ownable, Pausable {
     mapping(uint256 => uint256) public yesVotes;
     mapping(uint256 => uint256) public noVotes;
 
+    // Allowlist for FriendsOnly markets. Creator is implicitly allowed and
+    // doesn't need an entry here. For public markets (Market.isPublic == true)
+    // this mapping is ignored entirely.
+    mapping(uint256 => mapping(address => bool)) public allowedStakers;
+
     event MarketCreated(
         uint256 indexed marketId,
         address indexed creator,
@@ -91,6 +118,7 @@ contract ToldyaHub is ReentrancyGuard, Ownable, Pausable {
         string question,
         string criteria
     );
+    event MarketMatched(uint256 indexed marketId, address indexed matcher);
     event Staked(uint256 indexed marketId, address indexed staker, Side side, uint256 netStake);
     event ResolutionVoted(uint256 indexed marketId, address indexed party, bool yesWon);
     event ResolutionRequested(uint256 indexed marketId, string question, string criteria);
@@ -123,6 +151,10 @@ contract ToldyaHub is ReentrancyGuard, Ownable, Pausable {
     error OracleDisabled();
     error StalemateNotReached();
     error MarketNotStuck();
+    error NotAllowed();
+    error AlreadyMatched();
+    error PairMustOpposeCreator();
+    error PairAmountMustMatch();
 
     constructor(IERC20 _stakeToken, address _oracle, address _treasury) Ownable(msg.sender) {
         stakeToken = _stakeToken;
@@ -164,13 +196,21 @@ contract ToldyaHub is ReentrancyGuard, Ownable, Pausable {
     /// @param oracleEnabled If true, anyone can escalate to the AI oracle when
     ///        stakers can't agree. If false, the market can only be resolved by
     ///        unanimous staker vote.
+    /// @param mode Pool (pari-mutuel) or Pair (1-on-1 matched wager).
+    /// @param minStakers Pool-mode only. Voids the market at deadline if fewer
+    ///        unique stakers participated. 0/1 = no minimum.
+    /// @param allowedStakers_ Empty array = public market. Non-empty = only
+    ///        these addresses (plus the creator) can stake.
     function createMarket(
         string calldata question,
         string calldata criteria,
         uint64 deadline,
         Side side,
         uint256 amount,
-        bool oracleEnabled
+        bool oracleEnabled,
+        WagerMode mode,
+        uint8 minStakers,
+        address[] calldata allowedStakers_
     ) external nonReentrant whenNotPaused returns (uint256 marketId) {
         if (bytes(question).length == 0) revert EmptyQuestion();
         if (deadline <= block.timestamp) revert InvalidDeadline();
@@ -182,8 +222,17 @@ contract ToldyaHub is ReentrancyGuard, Ownable, Pausable {
         m.deadline = deadline;
         m.status = Status.Open;
         m.oracleEnabled = oracleEnabled;
+        m.mode = mode;
+        m.minStakers = mode == WagerMode.Pair ? 2 : minStakers;
+        m.isPublic = allowedStakers_.length == 0;
         m.question = question;
         m.criteria = criteria;
+
+        if (!m.isPublic) {
+            for (uint256 i = 0; i < allowedStakers_.length; i++) {
+                allowedStakers[marketId][allowedStakers_[i]] = true;
+            }
+        }
 
         uint256 net = _pullAndFee(msg.sender, amount);
         if (side == Side.Yes) {
@@ -205,6 +254,26 @@ contract ToldyaHub is ReentrancyGuard, Ownable, Pausable {
         if (block.timestamp >= m.deadline) revert DeadlinePassed();
         if (amount < MIN_STAKE) revert StakeTooSmall();
 
+        // Access control: FriendsOnly markets reject non-allowlisted addresses.
+        // The creator is implicitly allowed.
+        if (!m.isPublic && msg.sender != m.creator && !allowedStakers[marketId][msg.sender]) {
+            revert NotAllowed();
+        }
+
+        // Pair-mode constraints: only one counterparty, must oppose creator,
+        // amount must match creator's net stake, and the market locks after.
+        if (m.mode == WagerMode.Pair) {
+            if (m.matched) revert AlreadyMatched();
+            uint256 creatorNet = side == Side.Yes ? m.noPool : m.yesPool;
+            // The opposing side must already be non-empty (creator's stake);
+            // the side the matcher picks must be empty (no one staked yet).
+            uint256 mySideExisting = side == Side.Yes ? m.yesPool : m.noPool;
+            if (creatorNet == 0 || mySideExisting != 0) revert PairMustOpposeCreator();
+            uint256 fee = (amount * FEE_BPS) / BPS_DENOM;
+            uint256 netCheck = amount - fee;
+            if (netCheck != creatorNet) revert PairAmountMustMatch();
+        }
+
         uint256 net = _pullAndFee(msg.sender, amount);
         if (side == Side.Yes) {
             m.yesPool += net;
@@ -214,6 +283,11 @@ contract ToldyaHub is ReentrancyGuard, Ownable, Pausable {
             noStake[marketId][msg.sender] += net;
         }
         _registerStaker(marketId, msg.sender);
+
+        if (m.mode == WagerMode.Pair) {
+            m.matched = true;
+            emit MarketMatched(marketId, msg.sender);
+        }
 
         emit Staked(marketId, msg.sender, side, net);
     }
@@ -228,6 +302,14 @@ contract ToldyaHub is ReentrancyGuard, Ownable, Pausable {
 
         // If one side has zero stake, void immediately — no oracle needed.
         if (m.yesPool == 0 || m.noPool == 0) {
+            m.status = Status.Voided;
+            emit MarketResolved(marketId, Status.Voided);
+            return;
+        }
+
+        // Quorum gate: if the market required N unique stakers and didn't get
+        // them, void at the deadline. Creator's own stake counts.
+        if (m.minStakers > 1 && _stakers[marketId].length < m.minStakers) {
             m.status = Status.Voided;
             emit MarketResolved(marketId, Status.Voided);
             return;

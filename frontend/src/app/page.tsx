@@ -34,6 +34,10 @@ type Market = {
     deadline: bigint;
     status: number;
     oracleEnabled: boolean;
+    mode: number; // 0 = Pool, 1 = Pair
+    minStakers: number;
+    matched: boolean;
+    isPublic: boolean;
     question: string;
     criteria: string;
     yesPool: bigint;
@@ -391,10 +395,26 @@ function CreatePanel() {
     const [side, setSide] = useState<0 | 1>(1);
     const [amount, setAmount] = useState("10");
     const [oracleFallback, setOracleFallback] = useState(false);
+    const [mode, setMode] = useState<0 | 1>(0); // 0=Pool, 1=Pair
+    const [minStakers, setMinStakers] = useState("0");
+    const [accessMode, setAccessMode] = useState<"public" | "friends">("public");
+    const [friendsList, setFriendsList] = useState("");
     const [busy, setBusy] = useState(false);
     const [stage, setStage] = useState<string>("");
     const [tx, setTx] = useState<string | null>(null);
     const [err, setErr] = useState<string | null>(null);
+
+    function parseFriendsList(): `0x${string}`[] {
+        // Accept commas, spaces, or newlines as separators. Validate each as an
+        // EVM address; ignore blanks.
+        const tokens = friendsList
+            .split(/[\s,]+/)
+            .map((s) => s.trim())
+            .filter(Boolean);
+        const bad = tokens.filter((t) => !/^0x[0-9a-fA-F]{40}$/.test(t));
+        if (bad.length > 0) throw new Error(`Not a valid wallet address: ${bad[0]}`);
+        return tokens as `0x${string}`[];
+    }
 
     async function submit() {
         if (!client || !address) return;
@@ -429,13 +449,26 @@ function CreatePanel() {
                 throw new Error("Deadline must be in the future");
             }
 
+            const allowed = accessMode === "friends" ? parseFriendsList() : [];
+            const minStakersNum = mode === 1 ? 0 : Math.max(0, Number(minStakers) | 0);
+
             setStage("Creating market (2/2)");
             const hash = await writeContractAsync({
                 chainId: ALLOWED_CHAIN.id,
                 address: HUB_ADDRESS,
                 abi: hubAbi,
                 functionName: "createMarket",
-                args: [question, criteria, deadlineTs, side, wei, oracleFallback],
+                args: [
+                    question,
+                    criteria,
+                    deadlineTs,
+                    side,
+                    wei,
+                    oracleFallback,
+                    mode,
+                    minStakersNum,
+                    allowed,
+                ],
             });
             setTx(hash);
             await client.waitForTransactionReceipt({hash});
@@ -577,6 +610,86 @@ function CreatePanel() {
                 Best for friend bets where you trust everyone to agree.
                 On: anyone can escalate to the AI agent if voters disagree.
             </p>
+
+            <label>Wager mode</label>
+            <div className="mc-bet-row">
+                <button
+                    type="button"
+                    className={mode === 0 ? "primary" : "ghost"}
+                    onClick={() => setMode(0)}
+                    disabled={busy}
+                >
+                    Pool — anyone joins
+                </button>
+                <button
+                    type="button"
+                    className={mode === 1 ? "primary" : "ghost"}
+                    onClick={() => setMode(1)}
+                    disabled={busy}
+                >
+                    Pair — 1-on-1 bet
+                </button>
+            </div>
+            <p className="muted" style={{fontSize: "0.78rem", margin: "0.4rem 0 0", lineHeight: 1.4}}>
+                {mode === 0
+                    ? "Many friends can stake on either side. Winning side splits the pot."
+                    : "Exactly one counterparty matches your stake at the same amount. Winner takes 2×."}
+            </p>
+
+            {mode === 0 && (
+                <>
+                    <label>Minimum stakers (optional)</label>
+                    <input
+                        type="number"
+                        min="0"
+                        step="1"
+                        value={minStakers}
+                        onChange={(e) => setMinStakers(e.target.value)}
+                        disabled={busy}
+                        placeholder="0 = no minimum"
+                    />
+                    <p className="muted" style={{fontSize: "0.78rem", margin: "0.3rem 0 0", lineHeight: 1.4}}>
+                        Market voids and refunds at the deadline if fewer unique people staked.
+                        Leave 0 to skip this check.
+                    </p>
+                </>
+            )}
+
+            <label>Who can stake?</label>
+            <div className="mc-bet-row">
+                <button
+                    type="button"
+                    className={accessMode === "public" ? "primary" : "ghost"}
+                    onClick={() => setAccessMode("public")}
+                    disabled={busy}
+                >
+                    Public — anyone
+                </button>
+                <button
+                    type="button"
+                    className={accessMode === "friends" ? "primary" : "ghost"}
+                    onClick={() => setAccessMode("friends")}
+                    disabled={busy}
+                >
+                    Friends only
+                </button>
+            </div>
+            {accessMode === "friends" && (
+                <>
+                    <textarea
+                        value={friendsList}
+                        onChange={(e) => setFriendsList(e.target.value)}
+                        placeholder={"0xAbc123…\n0xDef456…\nOne wallet address per line (commas/spaces OK)"}
+                        disabled={busy}
+                        style={{marginTop: "0.5rem"}}
+                    />
+                    <p className="muted" style={{fontSize: "0.78rem", margin: "0.3rem 0 0", lineHeight: 1.4}}>
+                        Only these wallets (plus you) will be able to stake. Useful for private friend
+                        bets on people you actually know — ask them to share their address from the
+                        topbar.
+                    </p>
+                </>
+            )}
 
             <button
                 className="primary lg"
@@ -1000,6 +1113,21 @@ function MarketCard({market, viewer, onChange}: {market: Market; viewer: `0x${st
                 <div className="mc-pills">
                     <span className={`badge ${statusBadgeClass}`}>{STATUS_LABEL[market.status]}</span>
                     <span className="badge">{timeLabel}</span>
+                    {market.mode === 1 && (
+                        <span className="badge" title="One creator, one matcher, equal stakes.">
+                            {market.matched ? "Pair · matched" : "Pair · open"}
+                        </span>
+                    )}
+                    {!market.isPublic && (
+                        <span className="badge" title="Only allowlisted wallets can stake on this market.">
+                            Friends only
+                        </span>
+                    )}
+                    {market.mode === 0 && market.minStakers > 1 && (
+                        <span className="badge" title="Market voids at the deadline if fewer unique people stake.">
+                            min {market.minStakers} stakers
+                        </span>
+                    )}
                 </div>
                 <div className="mc-pot">
                     <span className="mc-pot-num">{formatTaiko(total)}</span>
@@ -1052,7 +1180,7 @@ function MarketCard({market, viewer, onChange}: {market: Market; viewer: `0x${st
                             Settle ↓
                         </button>
                     )}
-                    {viewer && isOpen && !past && !isStaker && (
+                    {viewer && isOpen && !past && !isStaker && !(market.mode === 1 && market.matched) && (
                         <button className="primary sm" onClick={() => setBetOpen(true)}>
                             place a bet →
                         </button>

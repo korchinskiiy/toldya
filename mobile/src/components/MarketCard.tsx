@@ -16,6 +16,10 @@ export type Market = {
     deadline: bigint;
     status: number;
     oracleEnabled: boolean;
+    mode: number;
+    minStakers: number;
+    matched: boolean;
+    isPublic: boolean;
     question: string;
     criteria: string;
     yesPool: bigint;
@@ -160,6 +164,23 @@ export function MarketCard({
                             {past ? "deadline passed" : `closes ${deadlineLabel(market.deadline)}`}
                         </Text>
                     </View>
+                    {market.mode === 1 && (
+                        <View style={styles.pill}>
+                            <Text style={styles.pillText}>
+                                {market.matched ? "Pair · matched" : "Pair · open"}
+                            </Text>
+                        </View>
+                    )}
+                    {!market.isPublic && (
+                        <View style={styles.pill}>
+                            <Text style={styles.pillText}>Friends only</Text>
+                        </View>
+                    )}
+                    {market.mode === 0 && market.minStakers > 1 && (
+                        <View style={styles.pill}>
+                            <Text style={styles.pillText}>min {market.minStakers} stakers</Text>
+                        </View>
+                    )}
                 </View>
                 <View style={{alignItems: "flex-end"}}>
                     <Text style={styles.potNum}>{formatTaiko(total)}</Text>
@@ -232,7 +253,7 @@ export function MarketCard({
                     {stakerList.length} {stakerList.length === 1 ? "bettor" : "bettors"}
                 </Text>
                 <View style={styles.footActions}>
-                    {viewer && isOpen && !past && !isStaker && (
+                    {viewer && isOpen && !past && !isStaker && !(market.mode === 1 && market.matched) && (
                         <Pressable style={styles.footPrimary} onPress={() => setBetOpen(true)}>
                             <Text style={styles.footPrimaryText}>Place a bet</Text>
                         </Pressable>

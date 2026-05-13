@@ -40,6 +40,18 @@ contract ToldyaHubTest is Test {
         internal
         returns (uint256)
     {
+        return _create(creator, side, amount, oracleEnabled, ToldyaHub.WagerMode.Pool, 0, new address[](0));
+    }
+
+    function _create(
+        address creator,
+        ToldyaHub.Side side,
+        uint256 amount,
+        bool oracleEnabled,
+        ToldyaHub.WagerMode mode,
+        uint8 minStakers,
+        address[] memory allowed
+    ) internal returns (uint256) {
         vm.prank(creator);
         return hub.createMarket(
             "Will Tom finish a beer in 30s?",
@@ -47,7 +59,10 @@ contract ToldyaHubTest is Test {
             uint64(block.timestamp + DEADLINE_OFFSET),
             side,
             amount,
-            oracleEnabled
+            oracleEnabled,
+            mode,
+            minStakers,
+            allowed
         );
     }
 
@@ -68,19 +83,28 @@ contract ToldyaHubTest is Test {
     function test_createMarket_revertsOnPastDeadline() public {
         vm.expectRevert(ToldyaHub.InvalidDeadline.selector);
         vm.prank(rob);
-        hub.createMarket("q", "c", uint64(block.timestamp), ToldyaHub.Side.Yes, 10 ether, true);
+        hub.createMarket(
+            "q", "c", uint64(block.timestamp), ToldyaHub.Side.Yes, 10 ether, true,
+            ToldyaHub.WagerMode.Pool, 0, new address[](0)
+        );
     }
 
     function test_createMarket_revertsOnEmptyQuestion() public {
         vm.expectRevert(ToldyaHub.EmptyQuestion.selector);
         vm.prank(rob);
-        hub.createMarket("", "c", uint64(block.timestamp + 1 days), ToldyaHub.Side.Yes, 10 ether, true);
+        hub.createMarket(
+            "", "c", uint64(block.timestamp + 1 days), ToldyaHub.Side.Yes, 10 ether, true,
+            ToldyaHub.WagerMode.Pool, 0, new address[](0)
+        );
     }
 
     function test_createMarket_revertsBelowMinStake() public {
         vm.expectRevert(ToldyaHub.StakeTooSmall.selector);
         vm.prank(rob);
-        hub.createMarket("q", "c", uint64(block.timestamp + 1 days), ToldyaHub.Side.Yes, 1, true);
+        hub.createMarket(
+            "q", "c", uint64(block.timestamp + 1 days), ToldyaHub.Side.Yes, 1, true,
+            ToldyaHub.WagerMode.Pool, 0, new address[](0)
+        );
     }
 
     function test_triggerResolution_revertsIfOracleDisabled() public {
@@ -612,7 +636,10 @@ contract ToldyaHubTest is Test {
         hub.pause();
         vm.prank(rob);
         vm.expectRevert();
-        hub.createMarket("q", "c", uint64(block.timestamp + 1 days), ToldyaHub.Side.Yes, 10 ether, true);
+        hub.createMarket(
+            "q", "c", uint64(block.timestamp + 1 days), ToldyaHub.Side.Yes, 10 ether, true,
+            ToldyaHub.WagerMode.Pool, 0, new address[](0)
+        );
     }
 
     function test_pause_blocksAdditionalStakes() public {
@@ -655,5 +682,163 @@ contract ToldyaHubTest is Test {
         hub.unpause();
         uint256 id = _create(rob, ToldyaHub.Side.No, 100 ether);
         assertEq(uint256(hub.getMarket(id).status), uint256(ToldyaHub.Status.Open));
+    }
+
+    // -----------------------------------------------------------------
+    // Pair mode
+    // -----------------------------------------------------------------
+
+    function _createPair(address creator, ToldyaHub.Side side, uint256 amount) internal returns (uint256) {
+        return _create(creator, side, amount, false, ToldyaHub.WagerMode.Pair, 0, new address[](0));
+    }
+
+    function test_pair_matchesEqualAmount() public {
+        uint256 id = _createPair(rob, ToldyaHub.Side.No, 100 ether);
+        // After creation, only NO side has rob's net stake (99 ether).
+        assertEq(hub.getMarket(id).noPool, 99 ether);
+        assertEq(hub.getMarket(id).matched, false);
+
+        // Tom matches with exactly 100 ether on YES (same gross → same net).
+        vm.prank(tom);
+        hub.stake(id, ToldyaHub.Side.Yes, 100 ether);
+        assertEq(hub.getMarket(id).yesPool, 99 ether);
+        assertEq(hub.getMarket(id).matched, true);
+    }
+
+    function test_pair_rejectsUnequalAmount() public {
+        uint256 id = _createPair(rob, ToldyaHub.Side.No, 100 ether);
+        vm.expectRevert(ToldyaHub.PairAmountMustMatch.selector);
+        vm.prank(tom);
+        hub.stake(id, ToldyaHub.Side.Yes, 50 ether);
+    }
+
+    function test_pair_rejectsSameSide() public {
+        uint256 id = _createPair(rob, ToldyaHub.Side.No, 100 ether);
+        // Tom can't pile onto NO — pair only takes the opposite side.
+        vm.expectRevert(ToldyaHub.PairMustOpposeCreator.selector);
+        vm.prank(tom);
+        hub.stake(id, ToldyaHub.Side.No, 100 ether);
+    }
+
+    function test_pair_locksAfterMatch() public {
+        uint256 id = _createPair(rob, ToldyaHub.Side.No, 100 ether);
+        vm.prank(tom);
+        hub.stake(id, ToldyaHub.Side.Yes, 100 ether);
+
+        // A third staker can't join, even on a side that already has volume.
+        vm.expectRevert(ToldyaHub.AlreadyMatched.selector);
+        vm.prank(sam);
+        hub.stake(id, ToldyaHub.Side.Yes, 100 ether);
+    }
+
+    function test_pair_voidsIfUnmatchedByDeadline() public {
+        uint256 id = _createPair(rob, ToldyaHub.Side.No, 100 ether);
+        vm.warp(block.timestamp + DEADLINE_OFFSET);
+        // One-side-only voids in triggerResolution.
+        hub.triggerResolution(id);
+        assertEq(uint256(hub.getMarket(id).status), uint256(ToldyaHub.Status.Voided));
+
+        uint256 before = token.balanceOf(rob);
+        vm.prank(rob);
+        hub.claim(id);
+        assertEq(token.balanceOf(rob) - before, 99 ether);
+    }
+
+    function test_pair_winnerTakesAll() public {
+        uint256 id = _createPair(rob, ToldyaHub.Side.No, 100 ether);
+        vm.prank(tom);
+        hub.stake(id, ToldyaHub.Side.Yes, 100 ether);
+
+        // Both vote YES → resolve. Tom wins all 198 ether.
+        vm.prank(rob);
+        hub.voteResolution(id, true);
+        vm.prank(tom);
+        hub.voteResolution(id, true);
+        assertEq(uint256(hub.getMarket(id).status), uint256(ToldyaHub.Status.ResolvedYes));
+
+        uint256 before = token.balanceOf(tom);
+        vm.prank(tom);
+        hub.claim(id);
+        assertEq(token.balanceOf(tom) - before, 198 ether);
+    }
+
+    // -----------------------------------------------------------------
+    // FriendsOnly access
+    // -----------------------------------------------------------------
+
+    function test_friendsOnly_blocksStrangers() public {
+        address[] memory allowed = new address[](1);
+        allowed[0] = tom;
+        uint256 id = _create(rob, ToldyaHub.Side.No, 100 ether, true, ToldyaHub.WagerMode.Pool, 0, allowed);
+
+        // Sam isn't on the list — rejected.
+        vm.expectRevert(ToldyaHub.NotAllowed.selector);
+        vm.prank(sam);
+        hub.stake(id, ToldyaHub.Side.Yes, 50 ether);
+    }
+
+    function test_friendsOnly_allowsAllowlisted() public {
+        address[] memory allowed = new address[](1);
+        allowed[0] = tom;
+        uint256 id = _create(rob, ToldyaHub.Side.No, 100 ether, true, ToldyaHub.WagerMode.Pool, 0, allowed);
+
+        // Tom is on the list — passes.
+        vm.prank(tom);
+        hub.stake(id, ToldyaHub.Side.Yes, 50 ether);
+        assertEq(hub.getMarket(id).yesPool, 49.5 ether);
+    }
+
+    function test_friendsOnly_creatorImplicitlyAllowed() public {
+        address[] memory allowed = new address[](1);
+        allowed[0] = tom;
+        uint256 id = _create(rob, ToldyaHub.Side.No, 100 ether, true, ToldyaHub.WagerMode.Pool, 0, allowed);
+
+        // Rob (creator) isn't in the list explicitly but can still stake more.
+        vm.prank(rob);
+        hub.stake(id, ToldyaHub.Side.No, 10 ether);
+        assertEq(hub.getMarket(id).noPool, 99 ether + 9.9 ether);
+    }
+
+    function test_publicMarket_allowsAnyone() public {
+        // Empty allowlist = public.
+        uint256 id = _create(rob, ToldyaHub.Side.No, 100 ether);
+        vm.prank(sam);
+        hub.stake(id, ToldyaHub.Side.Yes, 10 ether);
+        assertEq(hub.getMarket(id).yesPool, 9.9 ether);
+    }
+
+    // -----------------------------------------------------------------
+    // minStakers quorum
+    // -----------------------------------------------------------------
+
+    function test_minStakers_voidsIfNotReached() public {
+        // Require at least 3 stakers. Only 2 stake.
+        uint256 id = _create(rob, ToldyaHub.Side.No, 100 ether, true, ToldyaHub.WagerMode.Pool, 3, new address[](0));
+        vm.prank(tom);
+        hub.stake(id, ToldyaHub.Side.Yes, 50 ether);
+        // Both sides populated, but only 2 unique stakers.
+
+        vm.warp(block.timestamp + DEADLINE_OFFSET);
+        hub.triggerResolution(id);
+        assertEq(uint256(hub.getMarket(id).status), uint256(ToldyaHub.Status.Voided));
+
+        // Both get their net stakes back.
+        uint256 robBefore = token.balanceOf(rob);
+        vm.prank(rob);
+        hub.claim(id);
+        assertEq(token.balanceOf(rob) - robBefore, 99 ether);
+    }
+
+    function test_minStakers_proceedsIfReached() public {
+        uint256 id = _create(rob, ToldyaHub.Side.No, 100 ether, true, ToldyaHub.WagerMode.Pool, 3, new address[](0));
+        vm.prank(tom);
+        hub.stake(id, ToldyaHub.Side.Yes, 50 ether);
+        vm.prank(sam);
+        hub.stake(id, ToldyaHub.Side.Yes, 30 ether);
+
+        vm.warp(block.timestamp + DEADLINE_OFFSET);
+        // 3 stakers (rob, tom, sam) → quorum hit → goes to oracle as normal.
+        hub.triggerResolution(id);
+        assertEq(uint256(hub.getMarket(id).status), uint256(ToldyaHub.Status.ResolutionRequested));
     }
 }

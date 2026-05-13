@@ -46,9 +46,20 @@ export function CreateMarketSheet({
     // Default: 24 hours from now.
     const [hours, setHours] = useState("24");
     const [oracleFallback, setOracleFallback] = useState(false);
+    const [mode, setMode] = useState<0 | 1>(0);
+    const [minStakers, setMinStakers] = useState("0");
+    const [accessMode, setAccessMode] = useState<"public" | "friends">("public");
+    const [friendsList, setFriendsList] = useState("");
     const [busy, setBusy] = useState(false);
     const [stage, setStage] = useState("");
     const [err, setErr] = useState<string | null>(null);
+
+    function parseFriendsList(): `0x${string}`[] {
+        const tokens = friendsList.split(/[\s,]+/).map((s) => s.trim()).filter(Boolean);
+        const bad = tokens.filter((t) => !/^0x[0-9a-fA-F]{40}$/.test(t));
+        if (bad.length > 0) throw new Error(`Not a valid wallet address: ${bad[0]}`);
+        return tokens as `0x${string}`[];
+    }
 
     function reset() {
         setQuestion("");
@@ -57,6 +68,10 @@ export function CreateMarketSheet({
         setHours("24");
         setSide(1);
         setOracleFallback(false);
+        setMode(0);
+        setMinStakers("0");
+        setAccessMode("public");
+        setFriendsList("");
         setErr(null);
         setStage("");
     }
@@ -93,13 +108,26 @@ export function CreateMarketSheet({
                 await client.waitForTransactionReceipt({hash: aHash});
             }
 
+            const allowed = accessMode === "friends" ? parseFriendsList() : [];
+            const minStakersNum = mode === 1 ? 0 : Math.max(0, Number(minStakers) | 0);
+
             setStage("Creating market (2/2)");
             const hash = await writeContractAsync({
                 chainId: ALLOWED_CHAIN.id,
                 address: HUB_ADDRESS,
                 abi: hubAbi,
                 functionName: "createMarket",
-                args: [question, criteria, deadlineTs, side, wei, oracleFallback],
+                args: [
+                    question,
+                    criteria,
+                    deadlineTs,
+                    side,
+                    wei,
+                    oracleFallback,
+                    mode,
+                    minStakersNum,
+                    allowed,
+                ],
             });
             await client.waitForTransactionReceipt({hash});
 
@@ -234,6 +262,95 @@ export function CreateMarketSheet({
                             </Text>
                         </View>
 
+                        <Text style={styles.label}>Wager mode</Text>
+                        <View style={styles.sideRow}>
+                            <Pressable
+                                style={[
+                                    styles.sideBtn,
+                                    mode === 0 ? styles.sideYesActive : styles.sideInactive,
+                                ]}
+                                onPress={() => setMode(0)}
+                                disabled={busy}
+                            >
+                                <Text style={[styles.sideBtnText, mode === 0 && styles.sideYesText]}>
+                                    Pool
+                                </Text>
+                            </Pressable>
+                            <Pressable
+                                style={[
+                                    styles.sideBtn,
+                                    mode === 1 ? styles.sideYesActive : styles.sideInactive,
+                                ]}
+                                onPress={() => setMode(1)}
+                                disabled={busy}
+                            >
+                                <Text style={[styles.sideBtnText, mode === 1 && styles.sideYesText]}>
+                                    Pair
+                                </Text>
+                            </Pressable>
+                        </View>
+                        <Text style={styles.modeHint}>
+                            {mode === 0
+                                ? "Many friends can stake on either side. Winning side splits the pot."
+                                : "One counterparty matches your stake at the same amount. Winner takes 2×."}
+                        </Text>
+
+                        {mode === 0 && (
+                            <>
+                                <Text style={styles.label}>Minimum stakers (optional)</Text>
+                                <TextInput
+                                    style={styles.input}
+                                    value={minStakers}
+                                    onChangeText={setMinStakers}
+                                    keyboardType="number-pad"
+                                    editable={!busy}
+                                    placeholder="0 = no minimum"
+                                    placeholderTextColor={colors.textFaint}
+                                />
+                            </>
+                        )}
+
+                        <Text style={styles.label}>Who can stake?</Text>
+                        <View style={styles.sideRow}>
+                            <Pressable
+                                style={[
+                                    styles.sideBtn,
+                                    accessMode === "public" ? styles.sideYesActive : styles.sideInactive,
+                                ]}
+                                onPress={() => setAccessMode("public")}
+                                disabled={busy}
+                            >
+                                <Text style={[styles.sideBtnText, accessMode === "public" && styles.sideYesText]}>
+                                    Public
+                                </Text>
+                            </Pressable>
+                            <Pressable
+                                style={[
+                                    styles.sideBtn,
+                                    accessMode === "friends" ? styles.sideYesActive : styles.sideInactive,
+                                ]}
+                                onPress={() => setAccessMode("friends")}
+                                disabled={busy}
+                            >
+                                <Text style={[styles.sideBtnText, accessMode === "friends" && styles.sideYesText]}>
+                                    Friends only
+                                </Text>
+                            </Pressable>
+                        </View>
+                        {accessMode === "friends" && (
+                            <TextInput
+                                style={[styles.input, styles.textarea]}
+                                value={friendsList}
+                                onChangeText={setFriendsList}
+                                placeholder={"0xAbc123…\n0xDef456…\nOne wallet address per line"}
+                                placeholderTextColor={colors.textFaint}
+                                editable={!busy}
+                                multiline
+                                autoCapitalize="none"
+                                autoCorrect={false}
+                            />
+                        )}
+
                         <Pressable
                             style={[
                                 styles.submit,
@@ -337,4 +454,5 @@ const styles = StyleSheet.create({
     submitText: {color: "#fff", fontWeight: "700", fontSize: 15},
     disabled: {opacity: 0.5},
     err: {color: colors.danger, fontSize: 13, marginTop: 12},
+    modeHint: {fontSize: 12, color: colors.textFaint, marginTop: 6, lineHeight: 17},
 });
