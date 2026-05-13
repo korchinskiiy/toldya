@@ -73,6 +73,7 @@ contract ToldyaHub is ReentrancyGuard, Ownable, Pausable {
     mapping(uint256 => mapping(address => bool)) public claimed;
     mapping(uint256 => string) public oracleQueryCid;
     mapping(uint256 => uint256) public oracleRequestId;
+    mapping(uint256 => IOracle) public oracleRequestOracle;
     mapping(uint256 => bool) public oracleRequestCreated;
 
     // Mutual-resolution state: track unique stakers per market and their votes.
@@ -252,8 +253,10 @@ contract ToldyaHub is ReentrancyGuard, Ownable, Pausable {
         if (bytes(queryCid).length == 0) revert MissingOracleQuery();
 
         m.status = Status.ResolutionRequested;
-        uint256 requestId = oracle.createRequest(queryCid);
+        IOracle requestOracle = oracle;
+        uint256 requestId = requestOracle.createRequest(queryCid);
         oracleRequestId[marketId] = requestId;
+        oracleRequestOracle[marketId] = requestOracle;
         oracleRequestCreated[marketId] = true;
         emit ResolutionRequested(marketId, m.question, m.criteria);
         emit OracleRequestCreated(marketId, requestId, queryCid);
@@ -341,7 +344,9 @@ contract ToldyaHub is ReentrancyGuard, Ownable, Pausable {
         if (m.status != Status.ResolutionRequested) revert NotResolved();
         if (!oracleRequestCreated[marketId]) revert OracleRequestMissing();
 
-        (IOracle.Outcome outcome, IOracle.Status oracleStatus) = oracle.outcomeOf(oracleRequestId[marketId]);
+        IOracle requestOracle = oracleRequestOracle[marketId];
+        (IOracle.Outcome outcome, IOracle.Status oracleStatus) =
+            requestOracle.outcomeOf(oracleRequestId[marketId]);
         if (oracleStatus != IOracle.Status.Settled) revert OraclePending();
 
         if (outcome == IOracle.Outcome.YES) {

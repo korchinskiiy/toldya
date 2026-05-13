@@ -252,6 +252,27 @@ contract ToldyaHubTest is Test {
         assertEq(uint256(hub.getMarket(id).status), uint256(ToldyaHub.Status.ResolvedNo));
     }
 
+    function test_resolveMarket_usesTriggeredOracleAfterRotation() public {
+        uint256 id = _create(rob, ToldyaHub.Side.No, 100 ether);
+        vm.prank(tom);
+        hub.stake(id, ToldyaHub.Side.Yes, 50 ether);
+        vm.warp(block.timestamp + DEADLINE_OFFSET);
+        hub.triggerResolution(id);
+
+        MockOracle originalOracle = oracle;
+        MockOracle secondOracle = new MockOracle();
+        hub.setOracle(address(secondOracle));
+
+        uint256 requestId = hub.oracleRequestId(id);
+        originalOracle.setResult(requestId, IOracle.Outcome.YES, IOracle.Status.Settled);
+        secondOracle.setResult(0, IOracle.Outcome.NO, IOracle.Status.Settled);
+
+        hub.resolveMarket(id);
+
+        assertEq(uint256(hub.getMarket(id).status), uint256(ToldyaHub.Status.ResolvedYes));
+        assertEq(address(hub.oracleRequestOracle(id)), address(originalOracle));
+    }
+
     function test_resolveMarket_abstainLeavesResolutionRequested() public {
         uint256 id = _create(rob, ToldyaHub.Side.No, 100 ether);
         vm.prank(tom);
