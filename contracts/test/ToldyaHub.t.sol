@@ -240,6 +240,74 @@ contract ToldyaHubTest is Test {
         assertEq(uint256(m.status), uint256(ToldyaHub.Status.ResolutionRequested));
     }
 
+    function test_triggerResolution_callsOracleCreateRequest() public {
+        uint256 id = _create(rob, ToldyaHub.Side.No, 100 ether);
+        vm.prank(tom);
+        hub.stake(id, ToldyaHub.Side.Yes, 50 ether);
+        vm.warp(block.timestamp + DEADLINE_OFFSET);
+
+        uint256 before = mockOracle.createRequestCallCount();
+        hub.triggerResolution(id);
+        assertEq(mockOracle.createRequestCallCount(), before + 1);
+        assertEq(mockOracle.capturedQueryCids(before), "bafybeigdyrTESTcid");
+    }
+
+    function test_triggerResolution_storesOracleRequestId() public {
+        uint256 id = _create(rob, ToldyaHub.Side.No, 100 ether);
+        vm.prank(tom);
+        hub.stake(id, ToldyaHub.Side.Yes, 50 ether);
+        vm.warp(block.timestamp + DEADLINE_OFFSET);
+
+        uint256 expectedReqId = mockOracle.nextId();
+        hub.triggerResolution(id);
+        assertEq(hub.getMarket(id).oracleRequestId, expectedReqId);
+    }
+
+    function test_triggerResolution_emptyPoolShortCircuit_skipsVetoCall() public {
+        uint256 id = _create(rob, ToldyaHub.Side.No, 100 ether);
+        // No counter-stake. Empty YES pool triggers void short-circuit.
+        vm.warp(block.timestamp + DEADLINE_OFFSET);
+
+        uint256 before = mockOracle.createRequestCallCount();
+        hub.triggerResolution(id);
+        assertEq(mockOracle.createRequestCallCount(), before, "void path must not call oracle");
+        assertEq(uint256(hub.getMarket(id).status), uint256(ToldyaHub.Status.Voided));
+    }
+
+    function test_triggerResolution_minStakersShortCircuit_skipsVetoCall() public {
+        address[] memory allowed = new address[](0);
+        vm.prank(rob);
+        uint256 id = hub.createMarket(
+            "bafybeigdyrTESTcid",
+            uint64(block.timestamp + DEADLINE_OFFSET),
+            ToldyaHub.Side.No,
+            100 ether,
+            true,
+            ToldyaHub.WagerMode.Pool,
+            5,  // minStakers = 5, only 2 will stake
+            allowed
+        );
+        vm.prank(tom);
+        hub.stake(id, ToldyaHub.Side.Yes, 50 ether);
+        vm.warp(block.timestamp + DEADLINE_OFFSET);
+
+        uint256 before = mockOracle.createRequestCallCount();
+        hub.triggerResolution(id);
+        assertEq(mockOracle.createRequestCallCount(), before, "minStakers void must not call oracle");
+        assertEq(uint256(hub.getMarket(id).status), uint256(ToldyaHub.Status.Voided));
+    }
+
+    function test_triggerResolution_idempotent() public {
+        uint256 id = _create(rob, ToldyaHub.Side.No, 100 ether);
+        vm.prank(tom);
+        hub.stake(id, ToldyaHub.Side.Yes, 50 ether);
+        vm.warp(block.timestamp + DEADLINE_OFFSET);
+
+        hub.triggerResolution(id);
+        vm.expectRevert(ToldyaHub.AlreadyRequested.selector);
+        hub.triggerResolution(id);
+    }
+
     function test_resolveMarket_yesWins_setsStatus() public {
         uint256 id = _create(rob, ToldyaHub.Side.No, 100 ether);
         vm.prank(tom);
