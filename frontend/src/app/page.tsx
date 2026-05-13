@@ -11,7 +11,12 @@ import {EvidenceUpload} from "@/components/EvidenceUpload";
 import {EventCard} from "@/components/EventCard";
 import {fetchFeed, type FeedEvent} from "@/lib/events";
 import {Avatar} from "@/lib/avatar";
-import {buildOracleQuestionPinMessage, pinOracleQuestion} from "@/lib/oracleQuestion";
+import {
+    ORACLE_QUESTION_LIMITS,
+    buildOracleQuestionPinMessage,
+    pinOracleQuestion,
+    validateOracleQuestionText,
+} from "@/lib/oracleQuestion";
 
 const FAUCET_AMOUNT = parseTaiko("1000");
 const EXPLORER = "https://hoodi.taikoscan.io";
@@ -404,6 +409,11 @@ function CreatePanel() {
         setErr(null);
         setTx(null);
         try {
+            if (oracleFallback) {
+                const validationError = validateOracleQuestionText({question, criteria});
+                if (validationError) throw new Error(validationError);
+            }
+
             const wei = parseTaiko(amount);
             setStage("Checking allowance");
             const allowance = (await client.readContract({
@@ -589,6 +599,8 @@ function CreatePanel() {
                 On: anyone can escalate to the AI agent if voters disagree.
                 Veto receives the question and criteria fixed at market creation; include any links
                 or evidence Veto should consider in the criteria before you create the market.
+                Limits: {ORACLE_QUESTION_LIMITS.question} characters for the question,{" "}
+                {ORACLE_QUESTION_LIMITS.criteria} for the criteria.
             </p>
 
             <button
