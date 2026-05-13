@@ -11,9 +11,10 @@ import {IOracle} from "./interfaces/IOracle.sol";
 /// @title ToldyaHub
 /// @notice Escrow-style P2P prediction markets. Anyone can open a YES/NO market
 ///         on any question. Stakers commit TAIKO into one of two pools; once the
-///         deadline passes an AI oracle resolves the outcome and the winning pool
-///         splits the entire pot pro-rata to net stake. If only one side has any
-///         stake at resolution, the market is voided and stakers are refunded.
+///         deadline passes a configured oracle can resolve the outcome and the
+///         winning pool splits the entire pot pro-rata to net stake. If only one
+///         side has any stake at resolution, the market is voided and stakers
+///         are refunded.
 contract ToldyaHub is ReentrancyGuard, Ownable, Pausable {
     using SafeERC20 for IERC20;
 
@@ -171,7 +172,7 @@ contract ToldyaHub is ReentrancyGuard, Ownable, Pausable {
     // -------------------------------------------------------------------------
 
     /// @notice Open a new market. Creator commits the first stake on `side`.
-    /// @param oracleEnabled If true, anyone can escalate to the AI oracle when
+    /// @param oracleEnabled If true, anyone can escalate to the Veto oracle when
     ///        stakers can't agree. If false, the market can only be resolved by
     ///        unanimous staker vote.
     function createMarket(
@@ -234,8 +235,8 @@ contract ToldyaHub is ReentrancyGuard, Ownable, Pausable {
     }
 
     /// @notice Anyone can trigger oracle resolution after the deadline (if the
-    ///         creator opted in to oracle fallback). Emits an event the off-chain
-    ///         AI oracle agent listens for.
+    ///         creator opted in to oracle fallback). This creates a request on
+    ///         the configured IOracle and snapshots that oracle for finalization.
     function triggerResolution(uint256 marketId) external {
         Market storage m = markets[marketId];
         if (m.status != Status.Open) revert AlreadyRequested();
@@ -306,7 +307,7 @@ contract ToldyaHub is ReentrancyGuard, Ownable, Pausable {
     ///         allowing stakers to recover their funds via claim(). Covers
     ///         two failure modes:
     ///           - Stakers can't agree and oracle is disabled → deadlock.
-    ///           - Oracle was enabled and triggered but never responded.
+    ///           - Oracle was enabled and triggered but never settled.
     function voidStalemate(uint256 marketId) external {
         Market storage m = markets[marketId];
         if (m.status != Status.Open && m.status != Status.ResolutionRequested) {
@@ -321,7 +322,8 @@ contract ToldyaHub is ReentrancyGuard, Ownable, Pausable {
 
     /// @notice Submit evidence (an IPFS-style CID pointing at an image/video/audio)
     ///         attached to a market. Anyone may submit while the market is open or
-    ///         in the resolution-requested phase; the AI oracle filters relevance.
+    ///         in the resolution-requested phase; evidence is not automatically
+    ///         forwarded to the oracle request.
     ///         The CID and metadata are emitted as events; nothing is stored
     ///         on-chain to keep gas down.
     function submitEvidence(

@@ -3,13 +3,13 @@
 P2P prediction markets for **everyday bets between friends**.
 
 > Rob bets Tom 10 TAIKO that Tom can't finish a beer in 30 seconds. They open a
-> market, both stake, the deadline hits, an AI agent reads the criteria + any
-> evidence, posts the verdict on-chain, and the winner takes the pot.
+> market, both stake, the deadline hits, Veto settles the oracle request, and
+> the winner takes the pot.
 
 Toldya is intentionally smaller than centralized prediction markets: anyone can
-spin up a market with no approval, the resolution is handled by an AI oracle
-service against the criteria the creator wrote, and the economic model is a
-simple **escrow** — no AMM, no shares, no curves.
+spin up a market with no approval, unresolved markets can escalate to the
+configured Veto oracle, and the economic model is a simple **escrow** — no AMM,
+no shares, no curves.
 
 ---
 
@@ -19,11 +19,14 @@ simple **escrow** — no AMM, no shares, no curves.
    deadline, and an initial TAIKO stake on YES or NO.
 2. **Friends stake** — anyone can deposit TAIKO into the YES or NO pool until
    the deadline. Stakes are **locked** until resolution.
-3. **Deadline passes** — anyone calls `triggerResolution(marketId)`, which
-   emits an event the AI oracle service listens for. If only one side has any
-   stake, the market is **voided** immediately and refunds happen.
-4. **AI agent resolves** — reads question + criteria, evaluates, posts
-   `RESULT:YES` or `RESULT:NO` back on-chain via `resolveMarket(...)`.
+3. **Deadline passes** — anyone calls `triggerResolution(marketId)`. If only
+   one side has any stake, the market is **voided** immediately and refunds
+   happen. Otherwise Toldya creates a Veto oracle request from the pinned
+   market question CID.
+4. **Veto resolves** — the Veto answerer/judge agents settle the request. Once
+   Veto returns `YES` or `NO`, anyone can call `resolveMarket(marketId)` on
+   Toldya. `ABSTAIN` leaves the market in `ResolutionRequested` until the
+   existing 14-day stalemate timeout can void it.
 5. **Winners claim** — each winner's claim is `(myStake / winningPool) * totalPot`.
 
 A flat **1% fee** is taken on every stake (regardless of outcome) and sent to
@@ -36,8 +39,9 @@ never get matched.
 
 ```
 contracts/    Foundry project — ToldyaHub.sol + tests + deploy script
-oracle/       Node + TypeScript service that watches events and calls Claude
+oracle/       Retired legacy direct oracle package
 frontend/     Next.js 15 + wagmi/viem app
+mobile/       Expo / React Native app
 ```
 
 ---
@@ -59,7 +63,7 @@ To deploy locally:
 ```bash
 anvil &                       # in another terminal
 export DEPLOYER_PK=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80   # anvil[0]
-export ORACLE_ADDRESS=0x70997970C51812dc3A010C7d01b50e0d17dc79C8                       # anvil[1]
+export ORACLE_ADDRESS=0x70997970C51812dc3A010C7d01b50e0d17dc79C8                       # Veto proxy / local IOracle
 export TREASURY_ADDRESS=0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC                     # anvil[2]
 forge script script/Deploy.s.sol --rpc-url http://localhost:8545 --broadcast
 ```
@@ -67,23 +71,29 @@ forge script script/Deploy.s.sol --rpc-url http://localhost:8545 --broadcast
 The script deploys a `MockToken` (mTAIKO) and the `ToldyaHub`. Note both
 addresses from the logs.
 
-### 2. Oracle service
+### 2. Veto oracle flow
 
-```bash
-cd ../oracle
-cp .env.example .env
-# Fill in:
-#   RPC_URL              (http://localhost:8545 for anvil)
-#   HUB_ADDRESS          (from the deploy script output)
-#   ORACLE_PRIVATE_KEY   (must match ORACLE_ADDRESS used at deploy time)
-#   ANTHROPIC_API_KEY    (your Anthropic key)
-npm install
-npm run dev
-```
+Toldya no longer runs its own oracle signer. Deploy or configure Veto
+separately, then set ToldyaHub's `ORACLE_ADDRESS` to the Veto proxy. The web
+app needs `PINATA_JWT` so it can pin the Veto-compatible question payload when
+users create oracle-enabled markets. The mobile app should set
+`EXPO_PUBLIC_ORACLE_PIN_URL` to the web app's `/api/oracle-question` route.
 
-The oracle subscribes to `ResolutionRequested` events. When one fires it asks
-Claude to read the market's question + criteria, parses `RESULT:YES`/`RESULT:NO`
-from the response, and submits `resolveMarket(marketId, yesWon)`.
+Operational flow:
+
+1. The frontend signs and pins the market question + criteria, then passes the
+   resulting CID into `createMarket(..., oracleEnabled=true, oracleQueryCid)`.
+2. After the market deadline, anyone calls `triggerResolution(marketId)`.
+   Toldya calls `IOracle.createRequest(queryCid)` on Veto and stores the
+   returned request id.
+3. Run the Veto answerer/judge agents until the Veto request reaches
+   `Settled`.
+4. Anyone calls `resolveMarket(marketId)` on Toldya. If Veto returned `YES` or
+   `NO`, Toldya resolves. If Veto returned `ABSTAIN`, the market remains
+   `ResolutionRequested` until `voidStalemate(marketId)` is available after
+   the existing 14-day timeout.
+
+The `oracle/` package is a retired placeholder and exits non-zero if started.
 
 ### 3. Frontend
 
@@ -91,6 +101,7 @@ from the response, and submits `resolveMarket(marketId, yesWon)`.
 cd ../frontend
 cp .env.example .env.local
 # Set NEXT_PUBLIC_HUB_ADDRESS and NEXT_PUBLIC_TOKEN_ADDRESS from the deploy.
+# Set PINATA_JWT for oracle-enabled market creation.
 npm install
 npm run dev
 ```
@@ -115,13 +126,12 @@ creator.
   Backing out would defeat the point of a friend bet.
 - **No share trading.** You can stake more on either side, but you can't sell
   your position to someone else.
-- **Single permissioned oracle.** One off-chain agent (the address set as
-  `oracle` on the hub) is trusted to post results. The interface is designed so
-  this can be swapped for an N-of-M agent committee or an optimistic
-  dispute-window oracle later.
-- **No on-chain dispute path.** If the AI gets it wrong, the only remedy is the
-  hub owner replacing the oracle address — fine for friends-mode, not fine for
-  high-stakes markets.
+- **External Veto oracle.** Toldya trusts the configured Veto contract for
+  oracle-enabled markets. The hub owner can rotate that address, but Toldya does
+  not run a direct oracle signer anymore.
+- **No on-chain dispute path inside Toldya.** If Veto settles incorrectly,
+  Toldya has no independent dispute mechanism — fine for friends-mode, not fine
+  for high-stakes markets.
 
 ## License
 

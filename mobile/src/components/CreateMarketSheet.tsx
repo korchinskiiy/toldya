@@ -250,7 +250,7 @@ export function CreateMarketSheet({
                         <View style={styles.toggleRow}>
                             <Switch value={oracleFallback} onValueChange={setOracleFallback} disabled={busy} />
                             <Text style={styles.toggleLabel}>
-                                Allow AI oracle fallback if stakers disagree
+                                Allow Veto oracle fallback if stakers disagree
                             </Text>
                         </View>
                         {oracleFallback && (

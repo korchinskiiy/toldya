@@ -590,7 +590,7 @@ function CreatePanel() {
                     style={{width: "auto", marginTop: 0}}
                 />
                 <span>
-                    Allow AI oracle fallback if stakers can't agree on the outcome
+                    Allow Veto oracle fallback if stakers can't agree on the outcome
                 </span>
             </label>
             <p className="muted" style={{fontSize: "0.78rem", margin: "0.3rem 0 0", lineHeight: 1.4}}>
@@ -780,7 +780,7 @@ function MarketCard({market, viewer, onChange}: {market: Market; viewer: `0x${st
     const past = Number(market.deadline) * 1000 < Date.now();
     const isOpen = market.status === 0;
     // Voting is allowed any time after the market is open — stakers can settle
-    // early when they all agree. The deadline only matters for AI-oracle escalation.
+    // early when they all agree. The deadline only matters for Veto oracle escalation.
     const showVerdict = isOpen;
     const resolved = market.status >= 2;
     const isStaker = Boolean(
@@ -1241,11 +1241,11 @@ function ResolutionPanel({
                 <div className="escalate-aside">
                     <div className="escalate-h">If you can't agree…</div>
                     <p>
-                        Anyone can hand it to the AI oracle to read the criteria and decide.
+                        Anyone can hand it to Veto to read the criteria and decide.
                         Evidence uploads help bettors decide, but are not automatically sent to Veto in this version.
                     </p>
                     <button className="ghost" onClick={onTrigger} disabled={busy} style={{width: "100%"}}>
-                        {busy ? "…" : "Escalate to AI oracle"}
+                        {busy ? "…" : "Escalate to Veto"}
                     </button>
                 </div>
             )}
