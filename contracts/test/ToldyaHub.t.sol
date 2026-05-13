@@ -121,6 +121,44 @@ contract ToldyaHubTest is Test {
         );
     }
 
+    function test_createMarket_storesQueryCid() public {
+        uint256 id = _create(rob, ToldyaHub.Side.No, 100 ether);
+        ToldyaHub.Market memory m = hub.getMarket(id);
+        assertEq(m.queryCid, "bafybeigdyrTESTcid");
+    }
+
+    function test_createMarket_emitsQueryCid() public {
+        vm.prank(rob);
+        vm.expectEmit(true, true, false, true, address(hub));
+        emit ToldyaHub.MarketCreated(
+            0,
+            rob,
+            ToldyaHub.Side.No,
+            uint64(block.timestamp + DEADLINE_OFFSET),
+            99 ether,
+            "bafybeigdyrTESTcid"
+        );
+        hub.createMarket(
+            "bafybeigdyrTESTcid",
+            uint64(block.timestamp + DEADLINE_OFFSET),
+            ToldyaHub.Side.No,
+            100 ether,
+            true,
+            ToldyaHub.WagerMode.Pool,
+            0,
+            new address[](0)
+        );
+    }
+
+    function test_createMarket_emptyQueryCidWithOracleDisabled_alsoReverts() public {
+        vm.expectRevert(ToldyaHub.EmptyQueryCid.selector);
+        vm.prank(rob);
+        hub.createMarket(
+            "", uint64(block.timestamp + 1 days), ToldyaHub.Side.Yes, 10 ether, false,
+            ToldyaHub.WagerMode.Pool, 0, new address[](0)
+        );
+    }
+
     function test_triggerResolution_revertsIfOracleDisabled() public {
         // Market created with oracleEnabled = false
         uint256 id = _create(rob, ToldyaHub.Side.No, 100 ether, false);
