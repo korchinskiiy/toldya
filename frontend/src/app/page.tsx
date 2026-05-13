@@ -11,6 +11,7 @@ import {EvidenceUpload} from "@/components/EvidenceUpload";
 import {EventCard} from "@/components/EventCard";
 import {fetchFeed, type FeedEvent} from "@/lib/events";
 import {Avatar} from "@/lib/avatar";
+import {pinOracleQuestion} from "@/lib/oracleQuestion";
 
 const FAUCET_AMOUNT = parseTaiko("1000");
 const EXPLORER = "https://hoodi.taikoscan.io";
@@ -429,13 +430,19 @@ function CreatePanel() {
                 throw new Error("Deadline must be in the future");
             }
 
+            let oracleQueryCid = "";
+            if (oracleFallback) {
+                setStage("Pinning Veto oracle question");
+                oracleQueryCid = await pinOracleQuestion({question, criteria});
+            }
+
             setStage("Creating market (2/2)");
             const hash = await writeContractAsync({
                 chainId: ALLOWED_CHAIN.id,
                 address: HUB_ADDRESS,
                 abi: hubAbi,
                 functionName: "createMarket",
-                args: [question, criteria, deadlineTs, side, wei, oracleFallback],
+                args: [question, criteria, deadlineTs, side, wei, oracleFallback, oracleQueryCid],
             });
             setTx(hash);
             await client.waitForTransactionReceipt({hash});
@@ -738,15 +745,6 @@ function MarketCard({market, viewer, onChange}: {market: Market; viewer: `0x${st
         args: viewer ? [market.id, viewer] : undefined,
         query: {enabled: Boolean(viewer), refetchInterval: 6000},
     });
-    const {data: oracleAddr} = useReadContract({
-        chainId: ALLOWED_CHAIN.id,
-        address: HUB_ADDRESS,
-        abi: hubAbi,
-        functionName: "oracle",
-    });
-    const isOracle =
-        viewer && oracleAddr && (oracleAddr as string).toLowerCase() === viewer.toLowerCase();
-
     const {data: stakers, refetch: refetchStakers} = useReadContract({
         chainId: ALLOWED_CHAIN.id,
         address: HUB_ADDRESS,
@@ -867,7 +865,7 @@ function MarketCard({market, viewer, onChange}: {market: Market; viewer: `0x${st
         }
     }
 
-    async function oracleResolve(yesWon: boolean) {
+    async function resolveFromVeto() {
         if (!client) return;
         setBusy(true);
         setErr(null);
@@ -878,7 +876,7 @@ function MarketCard({market, viewer, onChange}: {market: Market; viewer: `0x${st
                 address: HUB_ADDRESS,
                 abi: hubAbi,
                 functionName: "resolveMarket",
-                args: [market.id, yesWon],
+                args: [market.id],
             });
             setTx(hash);
             await client.waitForTransactionReceipt({hash});
@@ -1110,22 +1108,14 @@ function MarketCard({market, viewer, onChange}: {market: Market; viewer: `0x${st
                         />
                     )}
 
-                    {market.status === 1 && !isOracle && (
-                        <p className="muted">Waiting for AI oracle to post the verdict on-chain…</p>
-                    )}
-                    {market.status === 1 && isOracle && (
+                    {market.status === 1 && (
                         <div style={{padding: "0.8rem", background: "var(--accent-bg)", borderRadius: "var(--radius)", marginTop: "0.5rem"}}>
-                            <div className="muted" style={{fontSize: "0.78rem", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "0.5rem"}}>
-                                Oracle controls (you are the oracle)
-                            </div>
-                            <div className="mc-bet-row">
-                                <button className="yes" onClick={() => oracleResolve(true)} disabled={busy}>
-                                    {busy ? "…" : "Resolve YES"}
-                                </button>
-                                <button className="no" onClick={() => oracleResolve(false)} disabled={busy}>
-                                    {busy ? "…" : "Resolve NO"}
-                                </button>
-                            </div>
+                            <p className="muted" style={{fontSize: "0.85rem", margin: "0 0 0.6rem"}}>
+                                Waiting for Veto to settle the linked oracle request. Anyone can finalize this market after Veto returns YES or NO.
+                            </p>
+                            <button className="ghost" onClick={resolveFromVeto} disabled={busy}>
+                                {busy ? "…" : "Resolve from Veto"}
+                            </button>
                         </div>
                     )}
 

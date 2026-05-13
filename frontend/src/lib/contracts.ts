@@ -32,6 +32,7 @@ export const hubAbi = [
             {name: "side", type: "uint8"},
             {name: "amount", type: "uint256"},
             {name: "oracleEnabled", type: "bool"},
+            {name: "oracleQueryCid", type: "string"},
         ],
         outputs: [{name: "marketId", type: "uint256"}],
     },
@@ -134,10 +135,7 @@ export const hubAbi = [
         type: "function",
         name: "resolveMarket",
         stateMutability: "nonpayable",
-        inputs: [
-            {name: "marketId", type: "uint256"},
-            {name: "yesWon", type: "bool"},
-        ],
+        inputs: [{name: "marketId", type: "uint256"}],
         outputs: [],
     },
     {
@@ -146,6 +144,27 @@ export const hubAbi = [
         stateMutability: "view",
         inputs: [],
         outputs: [{name: "", type: "address"}],
+    },
+    {
+        type: "function",
+        name: "oracleRequestId",
+        stateMutability: "view",
+        inputs: [{name: "", type: "uint256"}],
+        outputs: [{name: "", type: "uint256"}],
+    },
+    {
+        type: "function",
+        name: "oracleRequestCreated",
+        stateMutability: "view",
+        inputs: [{name: "", type: "uint256"}],
+        outputs: [{name: "", type: "bool"}],
+    },
+    {
+        type: "function",
+        name: "oracleQueryCid",
+        stateMutability: "view",
+        inputs: [{name: "", type: "uint256"}],
+        outputs: [{name: "", type: "string"}],
     },
     {
         type: "function",
