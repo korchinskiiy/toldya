@@ -37,3 +37,5 @@ export const TOKEN_ADDRESS = requireAddress(
 
 export const REOWN_PROJECT_ID =
     process.env.EXPO_PUBLIC_REOWN_PROJECT_ID ?? "";
+
+export const ORACLE_PIN_URL = process.env.EXPO_PUBLIC_ORACLE_PIN_URL ?? "";

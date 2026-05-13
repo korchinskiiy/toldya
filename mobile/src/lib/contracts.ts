@@ -14,6 +14,7 @@ export const hubAbi = [
             {name: "side", type: "uint8"},
             {name: "amount", type: "uint256"},
             {name: "oracleEnabled", type: "bool"},
+            {name: "oracleQueryCid", type: "string"},
         ],
         outputs: [{name: "marketId", type: "uint256"}],
     },

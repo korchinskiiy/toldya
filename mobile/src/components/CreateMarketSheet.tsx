@@ -11,12 +11,18 @@ import {
     ScrollView,
     Switch,
 } from "react-native";
-import {useAccount, usePublicClient, useWriteContract} from "wagmi";
+import {useAccount, usePublicClient, useSignMessage, useWriteContract} from "wagmi";
 import {ALLOWED_CHAIN, HUB_ADDRESS, TOKEN_ADDRESS} from "../lib/chain";
 import {hubAbi, erc20Abi} from "../lib/contracts";
 import {parseTaiko} from "../lib/format";
 import {colors, radii} from "../lib/theme";
 import {friendlyError} from "../lib/errors";
+import {
+    buildOracleQuestionPinMessage,
+    ORACLE_QUESTION_LIMITS,
+    pinOracleQuestion,
+    validateOracleQuestionText,
+} from "../lib/oracleQuestion";
 
 const EXAMPLES = [
     "Will Tom finish a beer in 30 seconds?",
@@ -38,6 +44,7 @@ export function CreateMarketSheet({
     const {address} = useAccount();
     const client = usePublicClient();
     const {writeContractAsync} = useWriteContract();
+    const {signMessageAsync} = useSignMessage();
 
     const [question, setQuestion] = useState("");
     const [criteria, setCriteria] = useState("");
@@ -66,6 +73,10 @@ export function CreateMarketSheet({
         setBusy(true);
         setErr(null);
         try {
+            if (oracleFallback) {
+                const validation = validateOracleQuestionText({question, criteria});
+                if (validation) throw new Error(validation);
+            }
             const wei = parseTaiko(amount);
             const hoursNum = Number(hours);
             if (!Number.isFinite(hoursNum) || hoursNum <= 0) {
@@ -93,13 +104,22 @@ export function CreateMarketSheet({
                 await client.waitForTransactionReceipt({hash: aHash});
             }
 
+            let oracleQueryCid = "";
+            if (oracleFallback) {
+                setStage("Signing Veto oracle question");
+                const message = buildOracleQuestionPinMessage({question, criteria});
+                const signature = await signMessageAsync({message});
+                setStage("Pinning Veto oracle question");
+                oracleQueryCid = await pinOracleQuestion({question, criteria, address, signature});
+            }
+
             setStage("Creating market (2/2)");
             const hash = await writeContractAsync({
                 chainId: ALLOWED_CHAIN.id,
                 address: HUB_ADDRESS,
                 abi: hubAbi,
                 functionName: "createMarket",
-                args: [question, criteria, deadlineTs, side, wei, oracleFallback],
+                args: [question, criteria, deadlineTs, side, wei, oracleFallback, oracleQueryCid],
             });
             await client.waitForTransactionReceipt({hash});
 
@@ -233,6 +253,13 @@ export function CreateMarketSheet({
                                 Allow AI oracle fallback if stakers disagree
                             </Text>
                         </View>
+                        {oracleFallback && (
+                            <Text style={styles.oracleHint}>
+                                Veto sees question/criteria fixed at creation. Uploaded evidence is not
+                                automatically sent to Veto. Limits: {ORACLE_QUESTION_LIMITS.question} question /{" "}
+                                {ORACLE_QUESTION_LIMITS.criteria} criteria.
+                            </Text>
+                        )}
 
                         <Pressable
                             style={[
@@ -327,6 +354,7 @@ const styles = StyleSheet.create({
         marginTop: 16,
     },
     toggleLabel: {flex: 1, color: colors.textMuted, fontSize: 13, lineHeight: 18},
+    oracleHint: {color: colors.textMuted, fontSize: 12, lineHeight: 17, marginTop: 8},
     submit: {
         marginTop: 20,
         backgroundColor: colors.accent,
