@@ -1,4 +1,5 @@
 import {NextRequest, NextResponse} from "next/server";
+import {Redis} from "@upstash/redis";
 import {isAddress, verifyMessage} from "viem";
 import {
     buildOracleQuestionPayload,
@@ -12,9 +13,11 @@ const MAX_BODY_BYTES = 8_192;
 const RATE_LIMIT_WINDOW_MS = 10 * 60 * 1000;
 const RATE_LIMIT_MAX = 20;
 const RATE_LIMIT_MAX_ENTRIES = 10_000;
+const RATE_LIMIT_PREFIX = "toldya:oracle-pin";
 const SIGNATURE_RE = /^0x[0-9a-fA-F]{130}$/;
 
 const rateLimits = new Map<string, {count: number; resetAt: number}>();
+let redis: Redis | null | undefined;
 
 function getClientIp(req: NextRequest): string {
     const forwardedFor = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
@@ -28,7 +31,7 @@ function sweepExpiredRateLimits(now: number) {
     }
 }
 
-function consumeRateLimit(key: string): boolean {
+function consumeMemoryRateLimit(key: string): boolean {
     const now = Date.now();
     sweepExpiredRateLimits(now);
 
@@ -41,6 +44,52 @@ function consumeRateLimit(key: string): boolean {
     if (current.count >= RATE_LIMIT_MAX) return false;
     current.count += 1;
     return true;
+}
+
+function getRedis(): Redis | null {
+    if (redis !== undefined) return redis;
+
+    const url = process.env.ORACLE_PIN_RATE_LIMIT_REDIS_REST_URL;
+    const token = process.env.ORACLE_PIN_RATE_LIMIT_REDIS_REST_TOKEN;
+    redis = url && token ? new Redis({url, token}) : null;
+    return redis;
+}
+
+async function consumeDurableRateLimit(redisClient: Redis, key: string): Promise<boolean> {
+    const redisKey = `${RATE_LIMIT_PREFIX}:${key}`;
+    const created = await redisClient.set(redisKey, 1, {
+        px: RATE_LIMIT_WINDOW_MS,
+        nx: true,
+    });
+    if (created === "OK") return true;
+
+    const count = await redisClient.incr(redisKey);
+    if (count === 1) {
+        await redisClient.pexpire(redisKey, RATE_LIMIT_WINDOW_MS);
+    }
+    return count <= RATE_LIMIT_MAX;
+}
+
+async function consumeRateLimit(key: string): Promise<{ok: true} | {ok: false; status: number; error: string}> {
+    const redisClient = getRedis();
+    if (redisClient) {
+        try {
+            return (await consumeDurableRateLimit(redisClient, key))
+                ? {ok: true}
+                : {ok: false, status: 429, error: "rate limit exceeded"};
+        } catch (err) {
+            console.error("Oracle question rate limit failed", err);
+            return {ok: false, status: 503, error: "rate limit unavailable"};
+        }
+    }
+
+    if (process.env.NODE_ENV === "production") {
+        return {ok: false, status: 500, error: "rate limiter not configured"};
+    }
+
+    return consumeMemoryRateLimit(key)
+        ? {ok: true}
+        : {ok: false, status: 429, error: "rate limit exceeded"};
 }
 
 async function readLimitedBody(req: NextRequest): Promise<string | null> {
@@ -72,10 +121,9 @@ export async function POST(req: NextRequest) {
     }
 
     const clientIp = getClientIp(req);
-    // Best-effort only in serverless: production should also enforce this with
-    // edge, WAF, or provider-level limits because in-memory state is per isolate.
-    if (!consumeRateLimit(`ip:${clientIp}`)) {
-        return NextResponse.json({error: "rate limit exceeded"}, {status: 429});
+    const ipRateLimit = await consumeRateLimit(`ip:${clientIp}`);
+    if (!ipRateLimit.ok) {
+        return NextResponse.json({error: ipRateLimit.error}, {status: ipRateLimit.status});
     }
 
     if (!process.env.PINATA_JWT) {
@@ -130,8 +178,9 @@ export async function POST(req: NextRequest) {
     if (!verified) {
         return NextResponse.json({error: "bad signature"}, {status: 401});
     }
-    if (!consumeRateLimit(`address:${input.address.toLowerCase()}`)) {
-        return NextResponse.json({error: "rate limit exceeded"}, {status: 429});
+    const addressRateLimit = await consumeRateLimit(`address:${input.address.toLowerCase()}`);
+    if (!addressRateLimit.ok) {
+        return NextResponse.json({error: addressRateLimit.error}, {status: addressRateLimit.status});
     }
 
     const payload = buildOracleQuestionPayload({

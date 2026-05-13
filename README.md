@@ -76,8 +76,12 @@ addresses from the logs.
 Toldya no longer runs its own oracle signer. Deploy or configure Veto
 separately, then set ToldyaHub's `ORACLE_ADDRESS` to the Veto proxy. The web
 app needs `PINATA_JWT` so it can pin the Veto-compatible question payload when
-users create oracle-enabled markets. The mobile app should set
-`EXPO_PUBLIC_ORACLE_PIN_URL` to the web app's `/api/oracle-question` route.
+users create oracle-enabled markets. In production, the pin route also requires
+`ORACLE_PIN_RATE_LIMIT_REDIS_REST_URL` and
+`ORACLE_PIN_RATE_LIMIT_REDIS_REST_TOKEN` for shared Upstash Redis rate limiting;
+without them it fails closed before spending the Pinata credential. The mobile
+app should set `EXPO_PUBLIC_ORACLE_PIN_URL` to the web app's
+`/api/oracle-question` route.
 
 Operational flow:
 
