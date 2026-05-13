@@ -80,6 +80,15 @@ contract ToldyaHubTest is Test {
         hub.resolveMarket(marketId);
     }
 
+    function _triggered(address creator) internal returns (uint256 marketId, uint256 reqId) {
+        marketId = _create(creator, ToldyaHub.Side.No, 100 ether);
+        vm.prank(tom);
+        hub.stake(marketId, ToldyaHub.Side.Yes, 50 ether);
+        vm.warp(block.timestamp + DEADLINE_OFFSET);
+        hub.triggerResolution(marketId);
+        reqId = hub.getMarket(marketId).oracleRequestId;
+    }
+
     // -----------------------------------------------------------------
     // Creation
     // -----------------------------------------------------------------
@@ -319,6 +328,81 @@ contract ToldyaHubTest is Test {
 
         ToldyaHub.Market memory m = hub.getMarket(id);
         assertEq(uint256(m.status), uint256(ToldyaHub.Status.ResolvedYes));
+    }
+
+    function test_resolveMarket_revertsIfVetoOpen() public {
+        (uint256 id,) = _triggered(rob);
+        // mockOracle returns (Unset, Open) by default for unstubbed ids
+        vm.expectRevert(ToldyaHub.OraclePending.selector);
+        hub.resolveMarket(id);
+    }
+
+    function test_resolveMarket_revertsIfVetoAnswered() public {
+        (uint256 id, uint256 reqId) = _triggered(rob);
+        mockOracle.setOutcome(reqId, IOracle.Outcome.Unset, IOracle.Status.Answered);
+        vm.expectRevert(ToldyaHub.OraclePending.selector);
+        hub.resolveMarket(id);
+    }
+
+    function test_resolveMarket_resolvesYes() public {
+        (uint256 id, uint256 reqId) = _triggered(rob);
+        mockOracle.setOutcome(reqId, IOracle.Outcome.YES, IOracle.Status.Settled);
+        hub.resolveMarket(id);
+        assertEq(uint256(hub.getMarket(id).status), uint256(ToldyaHub.Status.ResolvedYes));
+    }
+
+    function test_resolveMarket_resolvesNo() public {
+        (uint256 id, uint256 reqId) = _triggered(rob);
+        mockOracle.setOutcome(reqId, IOracle.Outcome.NO, IOracle.Status.Settled);
+        hub.resolveMarket(id);
+        assertEq(uint256(hub.getMarket(id).status), uint256(ToldyaHub.Status.ResolvedNo));
+    }
+
+    function test_resolveMarket_abstainRevertsAndParks() public {
+        (uint256 id, uint256 reqId) = _triggered(rob);
+        mockOracle.setOutcome(reqId, IOracle.Outcome.ABSTAIN, IOracle.Status.Settled);
+        vm.expectRevert(ToldyaHub.OracleAbstained.selector);
+        hub.resolveMarket(id);
+        // market stays in ResolutionRequested for voidStalemate to clean up
+        assertEq(uint256(hub.getMarket(id).status), uint256(ToldyaHub.Status.ResolutionRequested));
+    }
+
+    function test_resolveMarket_unsetSettledReverts() public {
+        (uint256 id, uint256 reqId) = _triggered(rob);
+        mockOracle.setOutcome(reqId, IOracle.Outcome.Unset, IOracle.Status.Settled);
+        vm.expectRevert(ToldyaHub.InvalidOracleOutcome.selector);
+        hub.resolveMarket(id);
+    }
+
+    function test_resolveMarket_permissionless() public {
+        (uint256 id, uint256 reqId) = _triggered(rob);
+        mockOracle.setOutcome(reqId, IOracle.Outcome.YES, IOracle.Status.Settled);
+        // A random address (not creator, staker, owner, or oracle) can call.
+        address randomCaller = makeAddr("nobody");
+        vm.prank(randomCaller);
+        hub.resolveMarket(id);
+        assertEq(uint256(hub.getMarket(id).status), uint256(ToldyaHub.Status.ResolvedYes));
+    }
+
+    function test_resolveMarket_revertsNotResolvedOnOpenMarket() public {
+        uint256 id = _create(rob, ToldyaHub.Side.No, 100 ether);
+        vm.prank(tom);
+        hub.stake(id, ToldyaHub.Side.Yes, 50 ether);
+        // No triggerResolution. Stub Veto request 0 as YES Settled — Hub must
+        // not read it because m.status is still Open.
+        mockOracle.setOutcome(0, IOracle.Outcome.YES, IOracle.Status.Settled);
+
+        vm.expectRevert(ToldyaHub.NotResolved.selector);
+        hub.resolveMarket(id);
+    }
+
+    function test_resolveMarket_revertsNotResolvedOnAlreadyResolved() public {
+        (uint256 id, uint256 reqId) = _triggered(rob);
+        mockOracle.setOutcome(reqId, IOracle.Outcome.YES, IOracle.Status.Settled);
+        hub.resolveMarket(id);
+
+        vm.expectRevert(ToldyaHub.NotResolved.selector);
+        hub.resolveMarket(id);
     }
 
     // -----------------------------------------------------------------
