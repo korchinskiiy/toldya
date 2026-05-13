@@ -6,6 +6,7 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {IOracle} from "./interfaces/IOracle.sol";
 
 /// @title ToldyaHub
 /// @notice Escrow-style P2P prediction markets. Anyone can open a YES/NO market
@@ -62,7 +63,7 @@ contract ToldyaHub is ReentrancyGuard, Ownable, Pausable {
     uint256 public constant RESOLUTION_TIMEOUT = 14 days;
 
     IERC20 public immutable stakeToken;
-    address public oracle;
+    IOracle public oracle;
     address public treasury;
 
     uint256 public nextMarketId;
@@ -70,6 +71,9 @@ contract ToldyaHub is ReentrancyGuard, Ownable, Pausable {
     mapping(uint256 => mapping(address => uint256)) public yesStake;
     mapping(uint256 => mapping(address => uint256)) public noStake;
     mapping(uint256 => mapping(address => bool)) public claimed;
+    mapping(uint256 => string) public oracleQueryCid;
+    mapping(uint256 => uint256) public oracleRequestId;
+    mapping(uint256 => bool) public oracleRequestCreated;
 
     // Mutual-resolution state: track unique stakers per market and their votes.
     // 0 = no vote, 1 = YES, 2 = NO.
@@ -94,6 +98,7 @@ contract ToldyaHub is ReentrancyGuard, Ownable, Pausable {
     event Staked(uint256 indexed marketId, address indexed staker, Side side, uint256 netStake);
     event ResolutionVoted(uint256 indexed marketId, address indexed party, bool yesWon);
     event ResolutionRequested(uint256 indexed marketId, string question, string criteria);
+    event OracleRequestCreated(uint256 indexed marketId, uint256 indexed oracleRequestId, string queryCid);
     event MarketResolved(uint256 indexed marketId, Status outcome);
     event Claimed(uint256 indexed marketId, address indexed staker, uint256 amount);
     event EvidenceSubmitted(
@@ -112,7 +117,11 @@ contract ToldyaHub is ReentrancyGuard, Ownable, Pausable {
     error DeadlinePassed();
     error StakeTooSmall();
     error EmptyQuestion();
-    error NotOracle();
+    error MissingOracleQuery();
+    error OracleRequestMissing();
+    error OraclePending();
+    error OracleAbstained();
+    error InvalidOracleOutcome();
     error NotResolved();
     error AlreadyClaimed();
     error NothingToClaim();
@@ -126,7 +135,7 @@ contract ToldyaHub is ReentrancyGuard, Ownable, Pausable {
 
     constructor(IERC20 _stakeToken, address _oracle, address _treasury) Ownable(msg.sender) {
         stakeToken = _stakeToken;
-        oracle = _oracle;
+        oracle = IOracle(_oracle);
         treasury = _treasury;
     }
 
@@ -135,7 +144,7 @@ contract ToldyaHub is ReentrancyGuard, Ownable, Pausable {
     // -------------------------------------------------------------------------
 
     function setOracle(address _oracle) external onlyOwner {
-        oracle = _oracle;
+        oracle = IOracle(_oracle);
         emit OracleUpdated(_oracle);
     }
 
@@ -170,9 +179,11 @@ contract ToldyaHub is ReentrancyGuard, Ownable, Pausable {
         uint64 deadline,
         Side side,
         uint256 amount,
-        bool oracleEnabled
+        bool oracleEnabled,
+        string calldata _oracleQueryCid
     ) external nonReentrant whenNotPaused returns (uint256 marketId) {
         if (bytes(question).length == 0) revert EmptyQuestion();
+        if (oracleEnabled && bytes(_oracleQueryCid).length == 0) revert MissingOracleQuery();
         if (deadline <= block.timestamp) revert InvalidDeadline();
         if (amount < MIN_STAKE) revert StakeTooSmall();
 
@@ -184,6 +195,9 @@ contract ToldyaHub is ReentrancyGuard, Ownable, Pausable {
         m.oracleEnabled = oracleEnabled;
         m.question = question;
         m.criteria = criteria;
+        if (oracleEnabled) {
+            oracleQueryCid[marketId] = _oracleQueryCid;
+        }
 
         uint256 net = _pullAndFee(msg.sender, amount);
         if (side == Side.Yes) {
@@ -234,9 +248,15 @@ contract ToldyaHub is ReentrancyGuard, Ownable, Pausable {
         }
 
         if (!m.oracleEnabled) revert OracleDisabled();
+        string memory queryCid = oracleQueryCid[marketId];
+        if (bytes(queryCid).length == 0) revert MissingOracleQuery();
 
         m.status = Status.ResolutionRequested;
+        uint256 requestId = oracle.createRequest(queryCid);
+        oracleRequestId[marketId] = requestId;
+        oracleRequestCreated[marketId] = true;
         emit ResolutionRequested(marketId, m.question, m.criteria);
+        emit OracleRequestCreated(marketId, requestId, queryCid);
     }
 
     /// @notice Mutual resolution path: any staker can vote on the outcome at any
@@ -315,13 +335,24 @@ contract ToldyaHub is ReentrancyGuard, Ownable, Pausable {
         emit EvidenceSubmitted(marketId, msg.sender, cid, mediaType, description);
     }
 
-    /// @notice Called by the oracle agent with the verdict.
-    function resolveMarket(uint256 marketId, bool yesWon) external {
-        if (msg.sender != oracle) revert NotOracle();
+    /// @notice Resolve a triggered oracle-enabled market from the Veto oracle outcome.
+    function resolveMarket(uint256 marketId) external {
         Market storage m = markets[marketId];
         if (m.status != Status.ResolutionRequested) revert NotResolved();
+        if (!oracleRequestCreated[marketId]) revert OracleRequestMissing();
 
-        m.status = yesWon ? Status.ResolvedYes : Status.ResolvedNo;
+        (IOracle.Outcome outcome, IOracle.Status oracleStatus) = oracle.outcomeOf(oracleRequestId[marketId]);
+        if (oracleStatus != IOracle.Status.Settled) revert OraclePending();
+
+        if (outcome == IOracle.Outcome.YES) {
+            m.status = Status.ResolvedYes;
+        } else if (outcome == IOracle.Outcome.NO) {
+            m.status = Status.ResolvedNo;
+        } else if (outcome == IOracle.Outcome.ABSTAIN) {
+            revert OracleAbstained();
+        } else {
+            revert InvalidOracleOutcome();
+        }
         emit MarketResolved(marketId, m.status);
     }
 

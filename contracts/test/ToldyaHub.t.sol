@@ -3,13 +3,15 @@ pragma solidity ^0.8.26;
 
 import {Test} from "forge-std/Test.sol";
 import {ToldyaHub} from "../src/ToldyaHub.sol";
+import {IOracle} from "../src/interfaces/IOracle.sol";
 import {MockToken} from "../src/mocks/MockToken.sol";
+import {MockOracle} from "./mocks/MockOracle.sol";
 
 contract ToldyaHubTest is Test {
     ToldyaHub hub;
     MockToken token;
+    MockOracle oracle;
 
-    address oracle = makeAddr("oracle");
     address treasury = makeAddr("treasury");
     address rob = makeAddr("rob");
     address tom = makeAddr("tom");
@@ -17,10 +19,12 @@ contract ToldyaHubTest is Test {
 
     uint256 constant START = 1_000_000;
     uint256 constant DEADLINE_OFFSET = 1 days;
+    string constant ORACLE_QUERY_CID = "bafy-toldya-question";
 
     function setUp() public {
         token = new MockToken();
-        hub = new ToldyaHub(token, oracle, treasury);
+        oracle = new MockOracle();
+        hub = new ToldyaHub(token, address(oracle), treasury);
 
         vm.warp(START);
 
@@ -47,8 +51,15 @@ contract ToldyaHubTest is Test {
             uint64(block.timestamp + DEADLINE_OFFSET),
             side,
             amount,
-            oracleEnabled
+            oracleEnabled,
+            oracleEnabled ? ORACLE_QUERY_CID : ""
         );
+    }
+
+    function _resolveFromOracle(uint256 marketId, IOracle.Outcome outcome) internal {
+        uint256 requestId = hub.oracleRequestId(marketId);
+        oracle.setResult(requestId, outcome, IOracle.Status.Settled);
+        hub.resolveMarket(marketId);
     }
 
     // -----------------------------------------------------------------
@@ -68,19 +79,40 @@ contract ToldyaHubTest is Test {
     function test_createMarket_revertsOnPastDeadline() public {
         vm.expectRevert(ToldyaHub.InvalidDeadline.selector);
         vm.prank(rob);
-        hub.createMarket("q", "c", uint64(block.timestamp), ToldyaHub.Side.Yes, 10 ether, true);
+        hub.createMarket(
+            "q", "c", uint64(block.timestamp), ToldyaHub.Side.Yes, 10 ether, true, ORACLE_QUERY_CID
+        );
     }
 
     function test_createMarket_revertsOnEmptyQuestion() public {
         vm.expectRevert(ToldyaHub.EmptyQuestion.selector);
         vm.prank(rob);
-        hub.createMarket("", "c", uint64(block.timestamp + 1 days), ToldyaHub.Side.Yes, 10 ether, true);
+        hub.createMarket(
+            "", "c", uint64(block.timestamp + 1 days), ToldyaHub.Side.Yes, 10 ether, true, ORACLE_QUERY_CID
+        );
     }
 
     function test_createMarket_revertsBelowMinStake() public {
         vm.expectRevert(ToldyaHub.StakeTooSmall.selector);
         vm.prank(rob);
-        hub.createMarket("q", "c", uint64(block.timestamp + 1 days), ToldyaHub.Side.Yes, 1, true);
+        hub.createMarket(
+            "q", "c", uint64(block.timestamp + 1 days), ToldyaHub.Side.Yes, 1, true, ORACLE_QUERY_CID
+        );
+    }
+
+    function test_createMarket_requiresOracleCidWhenEnabled() public {
+        vm.expectRevert(ToldyaHub.MissingOracleQuery.selector);
+        vm.prank(rob);
+        hub.createMarket("q", "c", uint64(block.timestamp + 1 days), ToldyaHub.Side.Yes, 10 ether, true, "");
+    }
+
+    function test_createMarket_allowsEmptyOracleCidWhenDisabled() public {
+        vm.prank(rob);
+        uint256 id = hub.createMarket(
+            "q", "c", uint64(block.timestamp + 1 days), ToldyaHub.Side.Yes, 10 ether, false, ""
+        );
+
+        assertEq(hub.oracleQueryCid(id), "");
     }
 
     function test_triggerResolution_revertsIfOracleDisabled() public {
@@ -153,39 +185,102 @@ contract ToldyaHubTest is Test {
         assertEq(uint256(m.status), uint256(ToldyaHub.Status.Voided));
     }
 
-    function test_triggerResolution_emitsRequestWhenBothSidesStaked() public {
+    function test_triggerResolution_createsVetoRequest() public {
         uint256 id = _create(rob, ToldyaHub.Side.No, 100 ether);
         vm.prank(tom);
         hub.stake(id, ToldyaHub.Side.Yes, 50 ether);
         vm.warp(block.timestamp + DEADLINE_OFFSET);
 
+        vm.expectEmit(true, false, false, true);
+        emit ToldyaHub.ResolutionRequested(
+            id,
+            "Will Tom finish a beer in 30s?",
+            "Tom drinks a 0.5L beer; timer starts at first sip; YES if empty within 30s."
+        );
+        vm.expectEmit(true, true, false, true);
+        emit ToldyaHub.OracleRequestCreated(id, 0, ORACLE_QUERY_CID);
         hub.triggerResolution(id);
+
         ToldyaHub.Market memory m = hub.getMarket(id);
         assertEq(uint256(m.status), uint256(ToldyaHub.Status.ResolutionRequested));
+        assertTrue(hub.oracleRequestCreated(id));
+        assertEq(hub.oracleRequestId(id), 0);
+        assertEq(oracle.queryCidOf(0), ORACLE_QUERY_CID);
     }
 
-    function test_resolveMarket_onlyOracle() public {
+    function test_triggerResolution_cannotRunTwice() public {
         uint256 id = _create(rob, ToldyaHub.Side.No, 100 ether);
         vm.prank(tom);
         hub.stake(id, ToldyaHub.Side.Yes, 50 ether);
         vm.warp(block.timestamp + DEADLINE_OFFSET);
         hub.triggerResolution(id);
 
-        vm.expectRevert(ToldyaHub.NotOracle.selector);
-        hub.resolveMarket(id, true);
+        vm.expectRevert(ToldyaHub.AlreadyRequested.selector);
+        hub.triggerResolution(id);
     }
 
-    function test_resolveMarket_yesWins_setsStatus() public {
+    function test_resolveMarket_revertsWhileOraclePending() public {
         uint256 id = _create(rob, ToldyaHub.Side.No, 100 ether);
         vm.prank(tom);
         hub.stake(id, ToldyaHub.Side.Yes, 50 ether);
         vm.warp(block.timestamp + DEADLINE_OFFSET);
         hub.triggerResolution(id);
 
-        vm.prank(oracle);
-        hub.resolveMarket(id, true);
-        ToldyaHub.Market memory m = hub.getMarket(id);
-        assertEq(uint256(m.status), uint256(ToldyaHub.Status.ResolvedYes));
+        vm.expectRevert(ToldyaHub.OraclePending.selector);
+        hub.resolveMarket(id);
+    }
+
+    function test_resolveMarket_yesFromVeto() public {
+        uint256 id = _create(rob, ToldyaHub.Side.No, 100 ether);
+        vm.prank(tom);
+        hub.stake(id, ToldyaHub.Side.Yes, 50 ether);
+        vm.warp(block.timestamp + DEADLINE_OFFSET);
+        hub.triggerResolution(id);
+
+        _resolveFromOracle(id, IOracle.Outcome.YES);
+        assertEq(uint256(hub.getMarket(id).status), uint256(ToldyaHub.Status.ResolvedYes));
+    }
+
+    function test_resolveMarket_noFromVeto() public {
+        uint256 id = _create(rob, ToldyaHub.Side.No, 100 ether);
+        vm.prank(tom);
+        hub.stake(id, ToldyaHub.Side.Yes, 50 ether);
+        vm.warp(block.timestamp + DEADLINE_OFFSET);
+        hub.triggerResolution(id);
+
+        _resolveFromOracle(id, IOracle.Outcome.NO);
+        assertEq(uint256(hub.getMarket(id).status), uint256(ToldyaHub.Status.ResolvedNo));
+    }
+
+    function test_resolveMarket_abstainLeavesResolutionRequested() public {
+        uint256 id = _create(rob, ToldyaHub.Side.No, 100 ether);
+        vm.prank(tom);
+        hub.stake(id, ToldyaHub.Side.Yes, 50 ether);
+        vm.warp(block.timestamp + DEADLINE_OFFSET);
+        hub.triggerResolution(id);
+
+        uint256 requestId = hub.oracleRequestId(id);
+        oracle.setResult(requestId, IOracle.Outcome.ABSTAIN, IOracle.Status.Settled);
+        vm.expectRevert(ToldyaHub.OracleAbstained.selector);
+        hub.resolveMarket(id);
+        assertEq(uint256(hub.getMarket(id).status), uint256(ToldyaHub.Status.ResolutionRequested));
+    }
+
+    function test_voidStalemate_afterVetoAbstain() public {
+        uint256 id = _create(rob, ToldyaHub.Side.No, 100 ether);
+        vm.prank(tom);
+        hub.stake(id, ToldyaHub.Side.Yes, 50 ether);
+        vm.warp(block.timestamp + DEADLINE_OFFSET);
+        hub.triggerResolution(id);
+
+        uint256 requestId = hub.oracleRequestId(id);
+        oracle.setResult(requestId, IOracle.Outcome.ABSTAIN, IOracle.Status.Settled);
+        vm.expectRevert(ToldyaHub.OracleAbstained.selector);
+        hub.resolveMarket(id);
+
+        vm.warp(block.timestamp + 14 days + 1);
+        hub.voidStalemate(id);
+        assertEq(uint256(hub.getMarket(id).status), uint256(ToldyaHub.Status.Voided));
     }
 
     // -----------------------------------------------------------------
@@ -199,8 +294,7 @@ contract ToldyaHubTest is Test {
         hub.stake(id, ToldyaHub.Side.Yes, 50 ether);
         vm.warp(block.timestamp + DEADLINE_OFFSET);
         hub.triggerResolution(id);
-        vm.prank(oracle);
-        hub.resolveMarket(id, true);
+        _resolveFromOracle(id, IOracle.Outcome.YES);
 
         uint256 before = token.balanceOf(tom);
         vm.prank(tom);
@@ -220,8 +314,7 @@ contract ToldyaHubTest is Test {
         hub.stake(id, ToldyaHub.Side.Yes, 50 ether);
         vm.warp(block.timestamp + DEADLINE_OFFSET);
         hub.triggerResolution(id);
-        vm.prank(oracle);
-        hub.resolveMarket(id, true);
+        _resolveFromOracle(id, IOracle.Outcome.YES);
 
         // pot = 99 + 49.5 + 49.5 = 198. Each YES staker = 99.
         uint256 tBefore = token.balanceOf(tom);
@@ -240,8 +333,7 @@ contract ToldyaHubTest is Test {
         hub.stake(id, ToldyaHub.Side.Yes, 50 ether);
         vm.warp(block.timestamp + DEADLINE_OFFSET);
         hub.triggerResolution(id);
-        vm.prank(oracle);
-        hub.resolveMarket(id, true); // YES wins, Rob loses
+        _resolveFromOracle(id, IOracle.Outcome.YES); // YES wins, Rob loses
 
         vm.expectRevert(ToldyaHub.NothingToClaim.selector);
         vm.prank(rob);
@@ -254,8 +346,7 @@ contract ToldyaHubTest is Test {
         hub.stake(id, ToldyaHub.Side.Yes, 50 ether);
         vm.warp(block.timestamp + DEADLINE_OFFSET);
         hub.triggerResolution(id);
-        vm.prank(oracle);
-        hub.resolveMarket(id, true);
+        _resolveFromOracle(id, IOracle.Outcome.YES);
 
         vm.startPrank(tom);
         hub.claim(id);
@@ -285,8 +376,7 @@ contract ToldyaHubTest is Test {
         hub.stake(id, ToldyaHub.Side.Yes, 50 ether);
         vm.warp(block.timestamp + DEADLINE_OFFSET);
         hub.triggerResolution(id);
-        vm.prank(oracle);
-        hub.resolveMarket(id, true);
+        _resolveFromOracle(id, IOracle.Outcome.YES);
 
         uint256 preview = hub.previewClaim(id, tom);
         uint256 before = token.balanceOf(tom);
@@ -392,8 +482,7 @@ contract ToldyaHubTest is Test {
         hub.voteResolution(id, false);
 
         hub.triggerResolution(id);
-        vm.prank(oracle);
-        hub.resolveMarket(id, true);
+        _resolveFromOracle(id, IOracle.Outcome.YES);
         assertEq(uint256(hub.getMarket(id).status), uint256(ToldyaHub.Status.ResolvedYes));
     }
 
@@ -442,8 +531,7 @@ contract ToldyaHubTest is Test {
         hub.stake(id, ToldyaHub.Side.Yes, 50 ether);
         vm.warp(block.timestamp + DEADLINE_OFFSET);
         hub.triggerResolution(id);
-        vm.prank(oracle);
-        hub.resolveMarket(id, true);
+        _resolveFromOracle(id, IOracle.Outcome.YES);
 
         vm.expectRevert(ToldyaHub.EvidenceLocked.selector);
         vm.prank(tom);
@@ -463,7 +551,7 @@ contract ToldyaHubTest is Test {
         hub.setOracle(address(0xBEEF));
 
         hub.setOracle(address(0xBEEF));
-        assertEq(hub.oracle(), address(0xBEEF));
+        assertEq(address(hub.oracle()), address(0xBEEF));
     }
 
     // -----------------------------------------------------------------
@@ -542,7 +630,12 @@ contract ToldyaHubTest is Test {
     function test_voidStalemate_resolvesAfterTimeout() public {
         // Stakers disagree, oracle disabled, deadline passes — without the
         // escape hatch this market would lock funds forever.
-        uint256 id = _create(rob, ToldyaHub.Side.No, 100 ether, false /* oracleEnabled */);
+        uint256 id = _create(
+            rob,
+            ToldyaHub.Side.No,
+            100 ether,
+            false /* oracleEnabled */
+        );
         vm.prank(tom);
         hub.stake(id, ToldyaHub.Side.Yes, 50 ether);
 
@@ -612,7 +705,9 @@ contract ToldyaHubTest is Test {
         hub.pause();
         vm.prank(rob);
         vm.expectRevert();
-        hub.createMarket("q", "c", uint64(block.timestamp + 1 days), ToldyaHub.Side.Yes, 10 ether, true);
+        hub.createMarket(
+            "q", "c", uint64(block.timestamp + 1 days), ToldyaHub.Side.Yes, 10 ether, true, ORACLE_QUERY_CID
+        );
     }
 
     function test_pause_blocksAdditionalStakes() public {
