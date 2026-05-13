@@ -23,8 +23,8 @@ export function buildOracleQuestionPinMessage(args: {question: string; criteria:
 export function validateOracleQuestionText(args: {question: unknown; criteria: unknown}): string | null {
     if (typeof args.question !== "string" || args.question.trim().length === 0) return "Question is required.";
     if (typeof args.criteria !== "string" || args.criteria.trim().length === 0) return "Resolution criteria are required.";
-    if (args.question.length > ORACLE_QUESTION_LIMITS.question) return `Question must be ${ORACLE_QUESTION_LIMITS.question} characters or fewer.`;
-    if (args.criteria.length > ORACLE_QUESTION_LIMITS.criteria) return `Criteria must be ${ORACLE_QUESTION_LIMITS.criteria} characters or fewer.`;
+    if (args.question.trim().length > ORACLE_QUESTION_LIMITS.question) return `Question must be ${ORACLE_QUESTION_LIMITS.question} characters or fewer.`;
+    if (args.criteria.trim().length > ORACLE_QUESTION_LIMITS.criteria) return `Criteria must be ${ORACLE_QUESTION_LIMITS.criteria} characters or fewer.`;
     return null;
 }
 
@@ -34,6 +34,9 @@ export async function pinOracleQuestion(args: {
     address: `0x${string}`;
     signature: `0x${string}`;
 }): Promise<string> {
+    const validationError = validateOracleQuestionText(args);
+    if (validationError) throw new Error(validationError);
+
     if (!ORACLE_PIN_URL) throw new Error("Oracle pin endpoint is not configured. Set EXPO_PUBLIC_ORACLE_PIN_URL.");
     const res = await fetch(ORACLE_PIN_URL, {
         method: "POST",
