@@ -174,6 +174,7 @@ contract ToldyaHub is ReentrancyGuard, Ownable, Pausable {
 
     function setOracle(address _oracle) external onlyOwner {
         oracle = IOracle(_oracle);
+        emit OracleUpdated(_oracle);
     }
 
     function setTreasury(address _treasury) external onlyOwner {
