@@ -4,12 +4,14 @@ pragma solidity ^0.8.26;
 import {Test} from "forge-std/Test.sol";
 import {ToldyaHub} from "../src/ToldyaHub.sol";
 import {MockToken} from "../src/mocks/MockToken.sol";
+import {MockOracle} from "../src/mocks/MockOracle.sol";
+import {IOracle} from "../src/interfaces/IOracle.sol";
 
 contract ToldyaHubTest is Test {
     ToldyaHub hub;
     MockToken token;
 
-    address oracle = makeAddr("oracle");
+    MockOracle mockOracle;
     address treasury = makeAddr("treasury");
     address rob = makeAddr("rob");
     address tom = makeAddr("tom");
@@ -20,7 +22,8 @@ contract ToldyaHubTest is Test {
 
     function setUp() public {
         token = new MockToken();
-        hub = new ToldyaHub(token, oracle, treasury);
+        mockOracle = new MockOracle();
+        hub = new ToldyaHub(token, address(mockOracle), treasury);
 
         vm.warp(START);
 
@@ -54,8 +57,7 @@ contract ToldyaHubTest is Test {
     ) internal returns (uint256) {
         vm.prank(creator);
         return hub.createMarket(
-            "Will Tom finish a beer in 30s?",
-            "Tom drinks a 0.5L beer; timer starts at first sip; YES if empty within 30s.",
+            "bafybeigdyrTESTcid",
             uint64(block.timestamp + DEADLINE_OFFSET),
             side,
             amount,
@@ -64,6 +66,18 @@ contract ToldyaHubTest is Test {
             minStakers,
             allowed
         );
+    }
+
+    function _resolveYes(uint256 marketId) internal {
+        ToldyaHub.Market memory m = hub.getMarket(marketId);
+        mockOracle.setOutcome(m.oracleRequestId, IOracle.Outcome.YES, IOracle.Status.Settled);
+        hub.resolveMarket(marketId);
+    }
+
+    function _resolveNo(uint256 marketId) internal {
+        ToldyaHub.Market memory m = hub.getMarket(marketId);
+        mockOracle.setOutcome(m.oracleRequestId, IOracle.Outcome.NO, IOracle.Status.Settled);
+        hub.resolveMarket(marketId);
     }
 
     // -----------------------------------------------------------------
@@ -84,16 +98,16 @@ contract ToldyaHubTest is Test {
         vm.expectRevert(ToldyaHub.InvalidDeadline.selector);
         vm.prank(rob);
         hub.createMarket(
-            "q", "c", uint64(block.timestamp), ToldyaHub.Side.Yes, 10 ether, true,
+            "bafybeigdyrTESTcid", uint64(block.timestamp), ToldyaHub.Side.Yes, 10 ether, true,
             ToldyaHub.WagerMode.Pool, 0, new address[](0)
         );
     }
 
-    function test_createMarket_revertsOnEmptyQuestion() public {
-        vm.expectRevert(ToldyaHub.EmptyQuestion.selector);
+    function test_createMarket_revertsOnEmptyQueryCid() public {
+        vm.expectRevert(ToldyaHub.EmptyQueryCid.selector);
         vm.prank(rob);
         hub.createMarket(
-            "", "c", uint64(block.timestamp + 1 days), ToldyaHub.Side.Yes, 10 ether, true,
+            "", uint64(block.timestamp + 1 days), ToldyaHub.Side.Yes, 10 ether, true,
             ToldyaHub.WagerMode.Pool, 0, new address[](0)
         );
     }
@@ -102,7 +116,7 @@ contract ToldyaHubTest is Test {
         vm.expectRevert(ToldyaHub.StakeTooSmall.selector);
         vm.prank(rob);
         hub.createMarket(
-            "q", "c", uint64(block.timestamp + 1 days), ToldyaHub.Side.Yes, 1, true,
+            "bafybeigdyrTESTcid", uint64(block.timestamp + 1 days), ToldyaHub.Side.Yes, 1, true,
             ToldyaHub.WagerMode.Pool, 0, new address[](0)
         );
     }
@@ -188,17 +202,6 @@ contract ToldyaHubTest is Test {
         assertEq(uint256(m.status), uint256(ToldyaHub.Status.ResolutionRequested));
     }
 
-    function test_resolveMarket_onlyOracle() public {
-        uint256 id = _create(rob, ToldyaHub.Side.No, 100 ether);
-        vm.prank(tom);
-        hub.stake(id, ToldyaHub.Side.Yes, 50 ether);
-        vm.warp(block.timestamp + DEADLINE_OFFSET);
-        hub.triggerResolution(id);
-
-        vm.expectRevert(ToldyaHub.NotOracle.selector);
-        hub.resolveMarket(id, true);
-    }
-
     function test_resolveMarket_yesWins_setsStatus() public {
         uint256 id = _create(rob, ToldyaHub.Side.No, 100 ether);
         vm.prank(tom);
@@ -206,8 +209,8 @@ contract ToldyaHubTest is Test {
         vm.warp(block.timestamp + DEADLINE_OFFSET);
         hub.triggerResolution(id);
 
-        vm.prank(oracle);
-        hub.resolveMarket(id, true);
+        _resolveYes(id);
+
         ToldyaHub.Market memory m = hub.getMarket(id);
         assertEq(uint256(m.status), uint256(ToldyaHub.Status.ResolvedYes));
     }
@@ -223,8 +226,7 @@ contract ToldyaHubTest is Test {
         hub.stake(id, ToldyaHub.Side.Yes, 50 ether);
         vm.warp(block.timestamp + DEADLINE_OFFSET);
         hub.triggerResolution(id);
-        vm.prank(oracle);
-        hub.resolveMarket(id, true);
+        _resolveYes(id);
 
         uint256 before = token.balanceOf(tom);
         vm.prank(tom);
@@ -244,8 +246,7 @@ contract ToldyaHubTest is Test {
         hub.stake(id, ToldyaHub.Side.Yes, 50 ether);
         vm.warp(block.timestamp + DEADLINE_OFFSET);
         hub.triggerResolution(id);
-        vm.prank(oracle);
-        hub.resolveMarket(id, true);
+        _resolveYes(id);
 
         // pot = 99 + 49.5 + 49.5 = 198. Each YES staker = 99.
         uint256 tBefore = token.balanceOf(tom);
@@ -264,8 +265,7 @@ contract ToldyaHubTest is Test {
         hub.stake(id, ToldyaHub.Side.Yes, 50 ether);
         vm.warp(block.timestamp + DEADLINE_OFFSET);
         hub.triggerResolution(id);
-        vm.prank(oracle);
-        hub.resolveMarket(id, true); // YES wins, Rob loses
+        _resolveYes(id); // YES wins, Rob loses
 
         vm.expectRevert(ToldyaHub.NothingToClaim.selector);
         vm.prank(rob);
@@ -278,8 +278,7 @@ contract ToldyaHubTest is Test {
         hub.stake(id, ToldyaHub.Side.Yes, 50 ether);
         vm.warp(block.timestamp + DEADLINE_OFFSET);
         hub.triggerResolution(id);
-        vm.prank(oracle);
-        hub.resolveMarket(id, true);
+        _resolveYes(id);
 
         vm.startPrank(tom);
         hub.claim(id);
@@ -309,8 +308,7 @@ contract ToldyaHubTest is Test {
         hub.stake(id, ToldyaHub.Side.Yes, 50 ether);
         vm.warp(block.timestamp + DEADLINE_OFFSET);
         hub.triggerResolution(id);
-        vm.prank(oracle);
-        hub.resolveMarket(id, true);
+        _resolveYes(id);
 
         uint256 preview = hub.previewClaim(id, tom);
         uint256 before = token.balanceOf(tom);
@@ -416,8 +414,7 @@ contract ToldyaHubTest is Test {
         hub.voteResolution(id, false);
 
         hub.triggerResolution(id);
-        vm.prank(oracle);
-        hub.resolveMarket(id, true);
+        _resolveYes(id);
         assertEq(uint256(hub.getMarket(id).status), uint256(ToldyaHub.Status.ResolvedYes));
     }
 
@@ -466,8 +463,7 @@ contract ToldyaHubTest is Test {
         hub.stake(id, ToldyaHub.Side.Yes, 50 ether);
         vm.warp(block.timestamp + DEADLINE_OFFSET);
         hub.triggerResolution(id);
-        vm.prank(oracle);
-        hub.resolveMarket(id, true);
+        _resolveYes(id);
 
         vm.expectRevert(ToldyaHub.EvidenceLocked.selector);
         vm.prank(tom);
@@ -487,7 +483,7 @@ contract ToldyaHubTest is Test {
         hub.setOracle(address(0xBEEF));
 
         hub.setOracle(address(0xBEEF));
-        assertEq(hub.oracle(), address(0xBEEF));
+        assertEq(address(hub.oracle()), address(0xBEEF));
     }
 
     // -----------------------------------------------------------------
@@ -637,7 +633,7 @@ contract ToldyaHubTest is Test {
         vm.prank(rob);
         vm.expectRevert();
         hub.createMarket(
-            "q", "c", uint64(block.timestamp + 1 days), ToldyaHub.Side.Yes, 10 ether, true,
+            "bafybeigdyrTESTcid", uint64(block.timestamp + 1 days), ToldyaHub.Side.Yes, 10 ether, true,
             ToldyaHub.WagerMode.Pool, 0, new address[](0)
         );
     }
