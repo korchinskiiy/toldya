@@ -1,7 +1,7 @@
 "use client";
 
 import {useEffect, useRef, useState} from "react";
-import {useAccount, useBalance, useChainId, usePublicClient, useReadContract, useSwitchChain, useWriteContract} from "wagmi";
+import {useAccount, useBalance, useChainId, usePublicClient, useReadContract, useSignMessage, useSwitchChain, useWriteContract} from "wagmi";
 import {useAppKit} from "@reown/appkit/react";
 import {ALLOWED_CHAIN} from "@/lib/wagmi";
 import {HUB_ADDRESS, TOKEN_ADDRESS, erc20Abi, hubAbi} from "@/lib/contracts";
@@ -11,7 +11,7 @@ import {EvidenceUpload} from "@/components/EvidenceUpload";
 import {EventCard} from "@/components/EventCard";
 import {fetchFeed, type FeedEvent} from "@/lib/events";
 import {Avatar} from "@/lib/avatar";
-import {pinOracleQuestion} from "@/lib/oracleQuestion";
+import {buildOracleQuestionPinMessage, pinOracleQuestion} from "@/lib/oracleQuestion";
 
 const FAUCET_AMOUNT = parseTaiko("1000");
 const EXPLORER = "https://hoodi.taikoscan.io";
@@ -384,6 +384,7 @@ function CreatePanel() {
     const client = usePublicClient();
     const {address} = useAccount();
     const {writeContractAsync} = useWriteContract();
+    const {signMessageAsync} = useSignMessage();
 
     const [open, setOpen] = useState(false);
     const [question, setQuestion] = useState("");
@@ -432,8 +433,11 @@ function CreatePanel() {
 
             let oracleQueryCid = "";
             if (oracleFallback) {
+                const message = buildOracleQuestionPinMessage({question, criteria});
+                setStage("Signing Veto oracle question");
+                const signature = await signMessageAsync({message});
                 setStage("Pinning Veto oracle question");
-                oracleQueryCid = await pinOracleQuestion({question, criteria});
+                oracleQueryCid = await pinOracleQuestion({question, criteria, address, signature});
             }
 
             setStage("Creating market (2/2)");
@@ -583,6 +587,8 @@ function CreatePanel() {
                 Off (default): the bet can only resolve if all stakers vote the same way.
                 Best for friend bets where you trust everyone to agree.
                 On: anyone can escalate to the AI agent if voters disagree.
+                Veto receives the question and criteria fixed at market creation; include any links
+                or evidence Veto should consider in the criteria before you create the market.
             </p>
 
             <button
@@ -866,7 +872,7 @@ function MarketCard({market, viewer, onChange}: {market: Market; viewer: `0x${st
     }
 
     async function resolveFromVeto() {
-        if (!client) return;
+        if (!client || !viewer) return;
         setBusy(true);
         setErr(null);
         setTx(null);
@@ -1113,9 +1119,15 @@ function MarketCard({market, viewer, onChange}: {market: Market; viewer: `0x${st
                             <p className="muted" style={{fontSize: "0.85rem", margin: "0 0 0.6rem"}}>
                                 Waiting for Veto to settle the linked oracle request. Anyone can finalize this market after Veto returns YES or NO.
                             </p>
-                            <button className="ghost" onClick={resolveFromVeto} disabled={busy}>
-                                {busy ? "…" : "Resolve from Veto"}
-                            </button>
+                            {viewer ? (
+                                <button className="ghost" onClick={resolveFromVeto} disabled={busy}>
+                                    {busy ? "…" : "Resolve from Veto"}
+                                </button>
+                            ) : (
+                                <p className="muted" style={{fontSize: "0.85rem", margin: 0}}>
+                                    Connect your wallet to resolve from Veto.
+                                </p>
+                            )}
                         </div>
                     )}
 
@@ -1216,7 +1228,10 @@ function ResolutionPanel({
             {oracleEnabled && past && (
                 <div className="escalate-aside">
                     <div className="escalate-h">If you can't agree…</div>
-                    <p>Anyone can hand it to the AI oracle to read the criteria and decide.</p>
+                    <p>
+                        Anyone can hand it to the AI oracle to read the criteria and decide.
+                        Evidence uploads help bettors decide, but are not automatically sent to Veto in this version.
+                    </p>
                     <button className="ghost" onClick={onTrigger} disabled={busy} style={{width: "100%"}}>
                         {busy ? "…" : "Escalate to AI oracle"}
                     </button>

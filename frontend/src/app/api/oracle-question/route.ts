@@ -1,5 +1,10 @@
 import {NextRequest, NextResponse} from "next/server";
-import {buildOracleQuestionPayload} from "@/lib/oracleQuestion";
+import {isAddress, verifyMessage} from "viem";
+import {
+    buildOracleQuestionPayload,
+    buildOracleQuestionPinMessage,
+    validateOracleQuestionText,
+} from "@/lib/oracleQuestion";
 
 export const runtime = "nodejs";
 
@@ -8,17 +13,52 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({error: "PINATA_JWT not configured"}, {status: 500});
     }
 
-    const body = (await req.json()) as {question?: unknown; criteria?: unknown};
-    if (typeof body.question !== "string" || body.question.trim().length === 0) {
-        return NextResponse.json({error: "question is required"}, {status: 400});
+    let body: unknown;
+    try {
+        body = await req.json();
+    } catch {
+        return NextResponse.json({error: "invalid JSON body"}, {status: 400});
     }
-    if (typeof body.criteria !== "string" || body.criteria.trim().length === 0) {
-        return NextResponse.json({error: "criteria is required"}, {status: 400});
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+        return NextResponse.json({error: "invalid JSON body"}, {status: 400});
+    }
+
+    const input = body as {question?: unknown; criteria?: unknown; address?: unknown; signature?: unknown};
+
+    const validationError = validateOracleQuestionText({
+        question: input.question,
+        criteria: input.criteria,
+    });
+    if (validationError) {
+        return NextResponse.json({error: validationError}, {status: 400});
+    }
+    if (typeof input.address !== "string" || !isAddress(input.address)) {
+        return NextResponse.json({error: "valid address is required"}, {status: 400});
+    }
+    if (typeof input.signature !== "string" || !/^0x[0-9a-fA-F]+$/.test(input.signature)) {
+        return NextResponse.json({error: "valid signature is required"}, {status: 400});
+    }
+
+    const question = (input.question as string).trim();
+    const criteria = (input.criteria as string).trim();
+    const message = buildOracleQuestionPinMessage({question, criteria});
+    let verified = false;
+    try {
+        verified = await verifyMessage({
+            address: input.address,
+            message,
+            signature: input.signature as `0x${string}`,
+        });
+    } catch {
+        return NextResponse.json({error: "bad signature"}, {status: 401});
+    }
+    if (!verified) {
+        return NextResponse.json({error: "bad signature"}, {status: 401});
     }
 
     const payload = buildOracleQuestionPayload({
-        question: body.question,
-        criteria: body.criteria,
+        question,
+        criteria,
     });
 
     const res = await fetch("https://api.pinata.cloud/pinning/pinJSONToIPFS", {
@@ -34,6 +74,15 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({error: `Pinata error: ${await res.text()}`}, {status: res.status});
     }
 
-    const out = (await res.json()) as {IpfsHash: string};
+    let out: {IpfsHash?: unknown};
+    try {
+        out = (await res.json()) as {IpfsHash?: unknown};
+    } catch {
+        return NextResponse.json({error: "invalid Pinata response"}, {status: 502});
+    }
+    if (typeof out.IpfsHash !== "string" || out.IpfsHash.length === 0) {
+        return NextResponse.json({error: "invalid Pinata response"}, {status: 502});
+    }
+
     return NextResponse.json({cid: out.IpfsHash});
 }
