@@ -814,6 +814,27 @@ contract ToldyaHubTest is Test {
         hub.voidStalemate(id);
     }
 
+    function test_voidStalemate_voidsAbstainedMarketAfterTimeout() public {
+        (uint256 id, uint256 reqId) = _triggered(rob);
+        mockOracle.setOutcome(reqId, IOracle.Outcome.ABSTAIN, IOracle.Status.Settled);
+        vm.expectRevert(ToldyaHub.OracleAbstained.selector);
+        hub.resolveMarket(id);
+
+        // Fast-forward past deadline + RESOLUTION_TIMEOUT (14 days)
+        vm.warp(block.timestamp + 14 days);
+        hub.voidStalemate(id);
+        assertEq(uint256(hub.getMarket(id).status), uint256(ToldyaHub.Status.Voided));
+    }
+
+    function test_voidStalemate_voidsOracleSilentMarketAfterTimeout() public {
+        (uint256 id,) = _triggered(rob);
+        // mockOracle never gets setOutcome — Veto stays "silent" (Open).
+        // Hub stays in ResolutionRequested.
+        vm.warp(block.timestamp + 14 days);
+        hub.voidStalemate(id);
+        assertEq(uint256(hub.getMarket(id).status), uint256(ToldyaHub.Status.Voided));
+    }
+
     // -----------------------------------------------------------------
     // H5 — pause / unpause
     // -----------------------------------------------------------------
