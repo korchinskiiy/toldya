@@ -1,9 +1,10 @@
 import {parseAbiItem, type Address, type PublicClient} from "viem";
 import {HUB_ADDRESS, hubAbi} from "./contracts";
+import {fetchQueryPayload} from "./queryPayload";
 
 export const eventDefs = {
     MarketCreated: parseAbiItem(
-        "event MarketCreated(uint256 indexed marketId, address indexed creator, uint8 creatorSide, uint64 deadline, uint256 netStake, string question, string criteria)",
+        "event MarketCreated(uint256 indexed marketId, address indexed creator, uint8 creatorSide, uint64 deadline, uint256 netStake, string queryCid)",
     ),
     Staked: parseAbiItem(
         "event Staked(uint256 indexed marketId, address indexed staker, uint8 side, uint256 netStake)",
@@ -160,13 +161,18 @@ export async function fetchFeed(client: PublicClient, fromBlock: bigint = 0n): P
                         abi: hubAbi,
                         functionName: "getMarket",
                         args: [id],
-                    }) as Promise<{question: string}>,
+                    }) as Promise<{queryCid: string}>,
             ),
         ),
         Promise.all(blockNumbers.map((n) => client.getBlock({blockNumber: n}))),
     ]);
 
-    const questionById = new Map(marketIds.map((id, i) => [id, marketResults[i].question]));
+    const payloads = await Promise.all(
+        marketResults.map((m) => fetchQueryPayload(m.queryCid)),
+    );
+    const questionById = new Map(
+        marketIds.map((id, i) => [id, payloads[i]?.question ?? "(question unavailable)"]),
+    );
     const tsByBlock = new Map(blockNumbers.map((n, i) => [n, Number(blockResults[i].timestamp)]));
 
     const enriched: FeedEvent[] = partial.map(

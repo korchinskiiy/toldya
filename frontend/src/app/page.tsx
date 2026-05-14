@@ -5,6 +5,7 @@ import {useAccount, useBalance, useChainId, usePublicClient, useReadContract, us
 import {useAppKit} from "@reown/appkit/react";
 import {ALLOWED_CHAIN} from "@/lib/wagmi";
 import {HUB_ADDRESS, TOKEN_ADDRESS, erc20Abi, hubAbi} from "@/lib/contracts";
+import {fetchQueryPayload} from "@/lib/queryPayload";
 import {deadlineLabel, formatTaiko, parseTaiko} from "@/lib/format";
 import {EvidenceList} from "@/components/EvidenceList";
 import {EvidenceUpload} from "@/components/EvidenceUpload";
@@ -38,10 +39,14 @@ type Market = {
     minStakers: number;
     matched: boolean;
     isPublic: boolean;
-    question: string;
-    criteria: string;
+    queryCid: string;
+    oracleRequestId: bigint;
     yesPool: bigint;
     noPool: bigint;
+    // Resolved off-chain from queryCid. Empty string while loading or on
+    // fetch failure — existing JSX renders that gracefully as a blank row.
+    question: string;
+    criteria: string;
 };
 
 const STATUS_LABEL = ["Live", "Resolving", "YES won", "NO won", "Voided"];
@@ -757,8 +762,14 @@ function MarketList({address}: {address: `0x${string}` | undefined}) {
                             abi: hubAbi,
                             functionName: "getMarket",
                             args: [id],
-                        })) as Market;
-                        return {...m, id};
+                        })) as Omit<Market, "id" | "question" | "criteria">;
+                        const payload = await fetchQueryPayload(m.queryCid);
+                        return {
+                            ...m,
+                            id,
+                            question: payload?.question ?? "",
+                            criteria: payload?.criteria ?? "",
+                        } as Market;
                     }),
                 );
                 if (!cancelled) setMarkets(fetched.reverse());
