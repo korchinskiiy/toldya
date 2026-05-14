@@ -443,6 +443,9 @@ function CreatePanel() {
                 };
                 throw new Error(body.error || `upload failed (${uploadRes.status})`);
             }
+            // The route returns {url, cid}. We store the gateway URL on-chain
+            // (CID embedded in the path) so the read path can `fetch(queryCid)`
+            // directly without an IPFS resolver in the browser.
             const {url: queryCid} = (await uploadRes.json()) as {url: string};
 
             if (allowance < wei) {
