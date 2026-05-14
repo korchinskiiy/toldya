@@ -1093,4 +1093,13 @@ contract ToldyaHubTest is Test {
         vm.expectRevert(Initializable.InvalidInitialization.selector);
         hub.initialize(token, address(mockOracle), treasury, address(this));
     }
+
+    function test_initialize_revertsOnImplementationDirectly() public {
+        // ERC-1967 canonical implementation slot: keccak256("eip1967.proxy.implementation") - 1
+        bytes32 implSlot = 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc;
+        address impl = address(uint160(uint256(vm.load(address(hub), implSlot))));
+
+        vm.expectRevert(Initializable.InvalidInitialization.selector);
+        ToldyaHub(impl).initialize(token, address(mockOracle), treasury, address(this));
+    }
 }
