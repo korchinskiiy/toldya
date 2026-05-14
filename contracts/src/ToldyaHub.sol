@@ -6,6 +6,7 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {IOracle} from "./interfaces/IOracle.sol";
 
 /// @title ToldyaHub
 /// @notice Escrow-style P2P prediction markets. Anyone can open a YES/NO market
@@ -63,8 +64,8 @@ contract ToldyaHub is ReentrancyGuard, Ownable, Pausable {
         // Access control. true = anyone can stake. false = only addresses
         // in `allowedStakers[marketId][who]` (plus the creator) can stake.
         bool isPublic;
-        string question;
-        string criteria;
+        string queryCid;
+        uint256 oracleRequestId;
         uint256 yesPool; // sum of net (post-fee) YES stakes
         uint256 noPool; // sum of net (post-fee) NO stakes
     }
@@ -84,7 +85,7 @@ contract ToldyaHub is ReentrancyGuard, Ownable, Pausable {
     uint256 public constant RESOLUTION_TIMEOUT = 14 days;
 
     IERC20 public immutable stakeToken;
-    address public oracle;
+    IOracle public oracle;
     address public treasury;
 
     uint256 public nextMarketId;
@@ -115,13 +116,16 @@ contract ToldyaHub is ReentrancyGuard, Ownable, Pausable {
         Side creatorSide,
         uint64 deadline,
         uint256 netStake,
-        string question,
-        string criteria
+        string queryCid
     );
     event MarketMatched(uint256 indexed marketId, address indexed matcher);
     event Staked(uint256 indexed marketId, address indexed staker, Side side, uint256 netStake);
     event ResolutionVoted(uint256 indexed marketId, address indexed party, bool yesWon);
-    event ResolutionRequested(uint256 indexed marketId, string question, string criteria);
+    event ResolutionRequested(
+        uint256 indexed marketId,
+        uint256 indexed oracleRequestId,
+        string queryCid
+    );
     event MarketResolved(uint256 indexed marketId, Status outcome);
     event Claimed(uint256 indexed marketId, address indexed staker, uint256 amount);
     event EvidenceSubmitted(
@@ -139,8 +143,10 @@ contract ToldyaHub is ReentrancyGuard, Ownable, Pausable {
     error DeadlineNotReached();
     error DeadlinePassed();
     error StakeTooSmall();
-    error EmptyQuestion();
-    error NotOracle();
+    error EmptyQueryCid();
+    error OraclePending();
+    error OracleAbstained();
+    error InvalidOracleOutcome();
     error NotResolved();
     error AlreadyClaimed();
     error NothingToClaim();
@@ -158,7 +164,7 @@ contract ToldyaHub is ReentrancyGuard, Ownable, Pausable {
 
     constructor(IERC20 _stakeToken, address _oracle, address _treasury) Ownable(msg.sender) {
         stakeToken = _stakeToken;
-        oracle = _oracle;
+        oracle = IOracle(_oracle);
         treasury = _treasury;
     }
 
@@ -167,7 +173,7 @@ contract ToldyaHub is ReentrancyGuard, Ownable, Pausable {
     // -------------------------------------------------------------------------
 
     function setOracle(address _oracle) external onlyOwner {
-        oracle = _oracle;
+        oracle = IOracle(_oracle);
         emit OracleUpdated(_oracle);
     }
 
@@ -202,8 +208,7 @@ contract ToldyaHub is ReentrancyGuard, Ownable, Pausable {
     /// @param allowedStakers_ Empty array = public market. Non-empty = only
     ///        these addresses (plus the creator) can stake.
     function createMarket(
-        string calldata question,
-        string calldata criteria,
+        string calldata queryCid,
         uint64 deadline,
         Side side,
         uint256 amount,
@@ -212,7 +217,7 @@ contract ToldyaHub is ReentrancyGuard, Ownable, Pausable {
         uint8 minStakers,
         address[] calldata allowedStakers_
     ) external nonReentrant whenNotPaused returns (uint256 marketId) {
-        if (bytes(question).length == 0) revert EmptyQuestion();
+        if (bytes(queryCid).length == 0) revert EmptyQueryCid();
         if (deadline <= block.timestamp) revert InvalidDeadline();
         if (amount < MIN_STAKE) revert StakeTooSmall();
 
@@ -225,8 +230,7 @@ contract ToldyaHub is ReentrancyGuard, Ownable, Pausable {
         m.mode = mode;
         m.minStakers = mode == WagerMode.Pair ? 2 : minStakers;
         m.isPublic = allowedStakers_.length == 0;
-        m.question = question;
-        m.criteria = criteria;
+        m.queryCid = queryCid;
 
         if (!m.isPublic) {
             for (uint256 i = 0; i < allowedStakers_.length; i++) {
@@ -244,7 +248,7 @@ contract ToldyaHub is ReentrancyGuard, Ownable, Pausable {
         }
         _registerStaker(marketId, msg.sender);
 
-        emit MarketCreated(marketId, msg.sender, side, deadline, net, question, criteria);
+        emit MarketCreated(marketId, msg.sender, side, deadline, net, queryCid);
     }
 
     /// @notice Stake TAIKO on YES or NO for an open market.
@@ -318,7 +322,10 @@ contract ToldyaHub is ReentrancyGuard, Ownable, Pausable {
         if (!m.oracleEnabled) revert OracleDisabled();
 
         m.status = Status.ResolutionRequested;
-        emit ResolutionRequested(marketId, m.question, m.criteria);
+        uint256 reqId = oracle.createRequest(m.queryCid);
+        m.oracleRequestId = reqId;
+
+        emit ResolutionRequested(marketId, reqId, m.queryCid);
     }
 
     /// @notice Mutual resolution path: any staker can vote on the outcome at any
@@ -398,12 +405,22 @@ contract ToldyaHub is ReentrancyGuard, Ownable, Pausable {
     }
 
     /// @notice Called by the oracle agent with the verdict.
-    function resolveMarket(uint256 marketId, bool yesWon) external {
-        if (msg.sender != oracle) revert NotOracle();
+    function resolveMarket(uint256 marketId) external {
         Market storage m = markets[marketId];
         if (m.status != Status.ResolutionRequested) revert NotResolved();
 
-        m.status = yesWon ? Status.ResolvedYes : Status.ResolvedNo;
+        (IOracle.Outcome outcome, IOracle.Status oStatus) = oracle.outcomeOf(m.oracleRequestId);
+        if (oStatus != IOracle.Status.Settled) revert OraclePending();
+
+        if (outcome == IOracle.Outcome.YES) {
+            m.status = Status.ResolvedYes;
+        } else if (outcome == IOracle.Outcome.NO) {
+            m.status = Status.ResolvedNo;
+        } else if (outcome == IOracle.Outcome.ABSTAIN) {
+            revert OracleAbstained();
+        } else {
+            revert InvalidOracleOutcome();
+        }
         emit MarketResolved(marketId, m.status);
     }
 

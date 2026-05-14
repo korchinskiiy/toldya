@@ -4,12 +4,14 @@ pragma solidity ^0.8.26;
 import {Test} from "forge-std/Test.sol";
 import {ToldyaHub} from "../src/ToldyaHub.sol";
 import {MockToken} from "../src/mocks/MockToken.sol";
+import {MockOracle} from "../src/mocks/MockOracle.sol";
+import {IOracle} from "../src/interfaces/IOracle.sol";
 
 contract ToldyaHubTest is Test {
     ToldyaHub hub;
     MockToken token;
 
-    address oracle = makeAddr("oracle");
+    MockOracle mockOracle;
     address treasury = makeAddr("treasury");
     address rob = makeAddr("rob");
     address tom = makeAddr("tom");
@@ -20,7 +22,8 @@ contract ToldyaHubTest is Test {
 
     function setUp() public {
         token = new MockToken();
-        hub = new ToldyaHub(token, oracle, treasury);
+        mockOracle = new MockOracle();
+        hub = new ToldyaHub(token, address(mockOracle), treasury);
 
         vm.warp(START);
 
@@ -54,8 +57,7 @@ contract ToldyaHubTest is Test {
     ) internal returns (uint256) {
         vm.prank(creator);
         return hub.createMarket(
-            "Will Tom finish a beer in 30s?",
-            "Tom drinks a 0.5L beer; timer starts at first sip; YES if empty within 30s.",
+            "bafybeigdyrTESTcid",
             uint64(block.timestamp + DEADLINE_OFFSET),
             side,
             amount,
@@ -64,6 +66,27 @@ contract ToldyaHubTest is Test {
             minStakers,
             allowed
         );
+    }
+
+    function _resolveYes(uint256 marketId) internal {
+        ToldyaHub.Market memory m = hub.getMarket(marketId);
+        mockOracle.setOutcome(m.oracleRequestId, IOracle.Outcome.YES, IOracle.Status.Settled);
+        hub.resolveMarket(marketId);
+    }
+
+    function _resolveNo(uint256 marketId) internal {
+        ToldyaHub.Market memory m = hub.getMarket(marketId);
+        mockOracle.setOutcome(m.oracleRequestId, IOracle.Outcome.NO, IOracle.Status.Settled);
+        hub.resolveMarket(marketId);
+    }
+
+    function _triggered(address creator) internal returns (uint256 marketId, uint256 reqId) {
+        marketId = _create(creator, ToldyaHub.Side.No, 100 ether);
+        vm.prank(tom);
+        hub.stake(marketId, ToldyaHub.Side.Yes, 50 ether);
+        vm.warp(block.timestamp + DEADLINE_OFFSET);
+        hub.triggerResolution(marketId);
+        reqId = hub.getMarket(marketId).oracleRequestId;
     }
 
     // -----------------------------------------------------------------
@@ -84,16 +107,16 @@ contract ToldyaHubTest is Test {
         vm.expectRevert(ToldyaHub.InvalidDeadline.selector);
         vm.prank(rob);
         hub.createMarket(
-            "q", "c", uint64(block.timestamp), ToldyaHub.Side.Yes, 10 ether, true,
+            "bafybeigdyrTESTcid", uint64(block.timestamp), ToldyaHub.Side.Yes, 10 ether, true,
             ToldyaHub.WagerMode.Pool, 0, new address[](0)
         );
     }
 
-    function test_createMarket_revertsOnEmptyQuestion() public {
-        vm.expectRevert(ToldyaHub.EmptyQuestion.selector);
+    function test_createMarket_revertsOnEmptyQueryCid() public {
+        vm.expectRevert(ToldyaHub.EmptyQueryCid.selector);
         vm.prank(rob);
         hub.createMarket(
-            "", "c", uint64(block.timestamp + 1 days), ToldyaHub.Side.Yes, 10 ether, true,
+            "", uint64(block.timestamp + 1 days), ToldyaHub.Side.Yes, 10 ether, true,
             ToldyaHub.WagerMode.Pool, 0, new address[](0)
         );
     }
@@ -102,7 +125,45 @@ contract ToldyaHubTest is Test {
         vm.expectRevert(ToldyaHub.StakeTooSmall.selector);
         vm.prank(rob);
         hub.createMarket(
-            "q", "c", uint64(block.timestamp + 1 days), ToldyaHub.Side.Yes, 1, true,
+            "bafybeigdyrTESTcid", uint64(block.timestamp + 1 days), ToldyaHub.Side.Yes, 1, true,
+            ToldyaHub.WagerMode.Pool, 0, new address[](0)
+        );
+    }
+
+    function test_createMarket_storesQueryCid() public {
+        uint256 id = _create(rob, ToldyaHub.Side.No, 100 ether);
+        ToldyaHub.Market memory m = hub.getMarket(id);
+        assertEq(m.queryCid, "bafybeigdyrTESTcid");
+    }
+
+    function test_createMarket_emitsQueryCid() public {
+        vm.prank(rob);
+        vm.expectEmit(true, true, false, true, address(hub));
+        emit ToldyaHub.MarketCreated(
+            0,
+            rob,
+            ToldyaHub.Side.No,
+            uint64(block.timestamp + DEADLINE_OFFSET),
+            99 ether,
+            "bafybeigdyrTESTcid"
+        );
+        hub.createMarket(
+            "bafybeigdyrTESTcid",
+            uint64(block.timestamp + DEADLINE_OFFSET),
+            ToldyaHub.Side.No,
+            100 ether,
+            true,
+            ToldyaHub.WagerMode.Pool,
+            0,
+            new address[](0)
+        );
+    }
+
+    function test_createMarket_emptyQueryCidWithOracleDisabled_alsoReverts() public {
+        vm.expectRevert(ToldyaHub.EmptyQueryCid.selector);
+        vm.prank(rob);
+        hub.createMarket(
+            "", uint64(block.timestamp + 1 days), ToldyaHub.Side.Yes, 10 ether, false,
             ToldyaHub.WagerMode.Pool, 0, new address[](0)
         );
     }
@@ -188,15 +249,72 @@ contract ToldyaHubTest is Test {
         assertEq(uint256(m.status), uint256(ToldyaHub.Status.ResolutionRequested));
     }
 
-    function test_resolveMarket_onlyOracle() public {
+    function test_triggerResolution_callsOracleCreateRequest() public {
         uint256 id = _create(rob, ToldyaHub.Side.No, 100 ether);
         vm.prank(tom);
         hub.stake(id, ToldyaHub.Side.Yes, 50 ether);
         vm.warp(block.timestamp + DEADLINE_OFFSET);
-        hub.triggerResolution(id);
 
-        vm.expectRevert(ToldyaHub.NotOracle.selector);
-        hub.resolveMarket(id, true);
+        uint256 before = mockOracle.createRequestCallCount();
+        hub.triggerResolution(id);
+        assertEq(mockOracle.createRequestCallCount(), before + 1);
+        assertEq(mockOracle.capturedQueryCids(before), "bafybeigdyrTESTcid");
+    }
+
+    function test_triggerResolution_storesOracleRequestId() public {
+        uint256 id = _create(rob, ToldyaHub.Side.No, 100 ether);
+        vm.prank(tom);
+        hub.stake(id, ToldyaHub.Side.Yes, 50 ether);
+        vm.warp(block.timestamp + DEADLINE_OFFSET);
+
+        uint256 expectedReqId = mockOracle.nextId();
+        hub.triggerResolution(id);
+        assertEq(hub.getMarket(id).oracleRequestId, expectedReqId);
+    }
+
+    function test_triggerResolution_emptyPoolShortCircuit_skipsVetoCall() public {
+        uint256 id = _create(rob, ToldyaHub.Side.No, 100 ether);
+        // No counter-stake. Empty YES pool triggers void short-circuit.
+        vm.warp(block.timestamp + DEADLINE_OFFSET);
+
+        uint256 before = mockOracle.createRequestCallCount();
+        hub.triggerResolution(id);
+        assertEq(mockOracle.createRequestCallCount(), before, "void path must not call oracle");
+        assertEq(uint256(hub.getMarket(id).status), uint256(ToldyaHub.Status.Voided));
+    }
+
+    function test_triggerResolution_minStakersShortCircuit_skipsVetoCall() public {
+        address[] memory allowed = new address[](0);
+        vm.prank(rob);
+        uint256 id = hub.createMarket(
+            "bafybeigdyrTESTcid",
+            uint64(block.timestamp + DEADLINE_OFFSET),
+            ToldyaHub.Side.No,
+            100 ether,
+            true,
+            ToldyaHub.WagerMode.Pool,
+            5,  // minStakers = 5, only 2 will stake
+            allowed
+        );
+        vm.prank(tom);
+        hub.stake(id, ToldyaHub.Side.Yes, 50 ether);
+        vm.warp(block.timestamp + DEADLINE_OFFSET);
+
+        uint256 before = mockOracle.createRequestCallCount();
+        hub.triggerResolution(id);
+        assertEq(mockOracle.createRequestCallCount(), before, "minStakers void must not call oracle");
+        assertEq(uint256(hub.getMarket(id).status), uint256(ToldyaHub.Status.Voided));
+    }
+
+    function test_triggerResolution_idempotent() public {
+        uint256 id = _create(rob, ToldyaHub.Side.No, 100 ether);
+        vm.prank(tom);
+        hub.stake(id, ToldyaHub.Side.Yes, 50 ether);
+        vm.warp(block.timestamp + DEADLINE_OFFSET);
+
+        hub.triggerResolution(id);
+        vm.expectRevert(ToldyaHub.AlreadyRequested.selector);
+        hub.triggerResolution(id);
     }
 
     function test_resolveMarket_yesWins_setsStatus() public {
@@ -206,10 +324,85 @@ contract ToldyaHubTest is Test {
         vm.warp(block.timestamp + DEADLINE_OFFSET);
         hub.triggerResolution(id);
 
-        vm.prank(oracle);
-        hub.resolveMarket(id, true);
+        _resolveYes(id);
+
         ToldyaHub.Market memory m = hub.getMarket(id);
         assertEq(uint256(m.status), uint256(ToldyaHub.Status.ResolvedYes));
+    }
+
+    function test_resolveMarket_revertsIfVetoOpen() public {
+        (uint256 id,) = _triggered(rob);
+        // mockOracle returns (Unset, Open) by default for unstubbed ids
+        vm.expectRevert(ToldyaHub.OraclePending.selector);
+        hub.resolveMarket(id);
+    }
+
+    function test_resolveMarket_revertsIfVetoAnswered() public {
+        (uint256 id, uint256 reqId) = _triggered(rob);
+        mockOracle.setOutcome(reqId, IOracle.Outcome.Unset, IOracle.Status.Answered);
+        vm.expectRevert(ToldyaHub.OraclePending.selector);
+        hub.resolveMarket(id);
+    }
+
+    function test_resolveMarket_resolvesYes() public {
+        (uint256 id, uint256 reqId) = _triggered(rob);
+        mockOracle.setOutcome(reqId, IOracle.Outcome.YES, IOracle.Status.Settled);
+        hub.resolveMarket(id);
+        assertEq(uint256(hub.getMarket(id).status), uint256(ToldyaHub.Status.ResolvedYes));
+    }
+
+    function test_resolveMarket_resolvesNo() public {
+        (uint256 id, uint256 reqId) = _triggered(rob);
+        mockOracle.setOutcome(reqId, IOracle.Outcome.NO, IOracle.Status.Settled);
+        hub.resolveMarket(id);
+        assertEq(uint256(hub.getMarket(id).status), uint256(ToldyaHub.Status.ResolvedNo));
+    }
+
+    function test_resolveMarket_abstainRevertsAndParks() public {
+        (uint256 id, uint256 reqId) = _triggered(rob);
+        mockOracle.setOutcome(reqId, IOracle.Outcome.ABSTAIN, IOracle.Status.Settled);
+        vm.expectRevert(ToldyaHub.OracleAbstained.selector);
+        hub.resolveMarket(id);
+        // market stays in ResolutionRequested for voidStalemate to clean up
+        assertEq(uint256(hub.getMarket(id).status), uint256(ToldyaHub.Status.ResolutionRequested));
+    }
+
+    function test_resolveMarket_unsetSettledReverts() public {
+        (uint256 id, uint256 reqId) = _triggered(rob);
+        mockOracle.setOutcome(reqId, IOracle.Outcome.Unset, IOracle.Status.Settled);
+        vm.expectRevert(ToldyaHub.InvalidOracleOutcome.selector);
+        hub.resolveMarket(id);
+    }
+
+    function test_resolveMarket_permissionless() public {
+        (uint256 id, uint256 reqId) = _triggered(rob);
+        mockOracle.setOutcome(reqId, IOracle.Outcome.YES, IOracle.Status.Settled);
+        // A random address (not creator, staker, owner, or oracle) can call.
+        address randomCaller = makeAddr("nobody");
+        vm.prank(randomCaller);
+        hub.resolveMarket(id);
+        assertEq(uint256(hub.getMarket(id).status), uint256(ToldyaHub.Status.ResolvedYes));
+    }
+
+    function test_resolveMarket_revertsNotResolvedOnOpenMarket() public {
+        uint256 id = _create(rob, ToldyaHub.Side.No, 100 ether);
+        vm.prank(tom);
+        hub.stake(id, ToldyaHub.Side.Yes, 50 ether);
+        // No triggerResolution. Stub Veto request 0 as YES Settled — Hub must
+        // not read it because m.status is still Open.
+        mockOracle.setOutcome(0, IOracle.Outcome.YES, IOracle.Status.Settled);
+
+        vm.expectRevert(ToldyaHub.NotResolved.selector);
+        hub.resolveMarket(id);
+    }
+
+    function test_resolveMarket_revertsNotResolvedOnAlreadyResolved() public {
+        (uint256 id, uint256 reqId) = _triggered(rob);
+        mockOracle.setOutcome(reqId, IOracle.Outcome.YES, IOracle.Status.Settled);
+        hub.resolveMarket(id);
+
+        vm.expectRevert(ToldyaHub.NotResolved.selector);
+        hub.resolveMarket(id);
     }
 
     // -----------------------------------------------------------------
@@ -223,8 +416,7 @@ contract ToldyaHubTest is Test {
         hub.stake(id, ToldyaHub.Side.Yes, 50 ether);
         vm.warp(block.timestamp + DEADLINE_OFFSET);
         hub.triggerResolution(id);
-        vm.prank(oracle);
-        hub.resolveMarket(id, true);
+        _resolveYes(id);
 
         uint256 before = token.balanceOf(tom);
         vm.prank(tom);
@@ -244,8 +436,7 @@ contract ToldyaHubTest is Test {
         hub.stake(id, ToldyaHub.Side.Yes, 50 ether);
         vm.warp(block.timestamp + DEADLINE_OFFSET);
         hub.triggerResolution(id);
-        vm.prank(oracle);
-        hub.resolveMarket(id, true);
+        _resolveYes(id);
 
         // pot = 99 + 49.5 + 49.5 = 198. Each YES staker = 99.
         uint256 tBefore = token.balanceOf(tom);
@@ -264,8 +455,7 @@ contract ToldyaHubTest is Test {
         hub.stake(id, ToldyaHub.Side.Yes, 50 ether);
         vm.warp(block.timestamp + DEADLINE_OFFSET);
         hub.triggerResolution(id);
-        vm.prank(oracle);
-        hub.resolveMarket(id, true); // YES wins, Rob loses
+        _resolveYes(id); // YES wins, Rob loses
 
         vm.expectRevert(ToldyaHub.NothingToClaim.selector);
         vm.prank(rob);
@@ -278,8 +468,7 @@ contract ToldyaHubTest is Test {
         hub.stake(id, ToldyaHub.Side.Yes, 50 ether);
         vm.warp(block.timestamp + DEADLINE_OFFSET);
         hub.triggerResolution(id);
-        vm.prank(oracle);
-        hub.resolveMarket(id, true);
+        _resolveYes(id);
 
         vm.startPrank(tom);
         hub.claim(id);
@@ -309,8 +498,7 @@ contract ToldyaHubTest is Test {
         hub.stake(id, ToldyaHub.Side.Yes, 50 ether);
         vm.warp(block.timestamp + DEADLINE_OFFSET);
         hub.triggerResolution(id);
-        vm.prank(oracle);
-        hub.resolveMarket(id, true);
+        _resolveYes(id);
 
         uint256 preview = hub.previewClaim(id, tom);
         uint256 before = token.balanceOf(tom);
@@ -416,8 +604,7 @@ contract ToldyaHubTest is Test {
         hub.voteResolution(id, false);
 
         hub.triggerResolution(id);
-        vm.prank(oracle);
-        hub.resolveMarket(id, true);
+        _resolveYes(id);
         assertEq(uint256(hub.getMarket(id).status), uint256(ToldyaHub.Status.ResolvedYes));
     }
 
@@ -466,8 +653,7 @@ contract ToldyaHubTest is Test {
         hub.stake(id, ToldyaHub.Side.Yes, 50 ether);
         vm.warp(block.timestamp + DEADLINE_OFFSET);
         hub.triggerResolution(id);
-        vm.prank(oracle);
-        hub.resolveMarket(id, true);
+        _resolveYes(id);
 
         vm.expectRevert(ToldyaHub.EvidenceLocked.selector);
         vm.prank(tom);
@@ -487,7 +673,25 @@ contract ToldyaHubTest is Test {
         hub.setOracle(address(0xBEEF));
 
         hub.setOracle(address(0xBEEF));
-        assertEq(hub.oracle(), address(0xBEEF));
+        assertEq(address(hub.oracle()), address(0xBEEF));
+    }
+
+    function test_setOracle_takesEffectOnNextCreateRequest() public {
+        MockOracle newMock = new MockOracle();
+        hub.setOracle(address(newMock));
+
+        uint256 id = _create(rob, ToldyaHub.Side.No, 100 ether);
+        vm.prank(tom);
+        hub.stake(id, ToldyaHub.Side.Yes, 50 ether);
+        vm.warp(block.timestamp + DEADLINE_OFFSET);
+
+        uint256 originalCalls = mockOracle.createRequestCallCount();
+        hub.triggerResolution(id);
+
+        // The original mock must not have been called.
+        assertEq(mockOracle.createRequestCallCount(), originalCalls);
+        // The new mock receives the call.
+        assertEq(newMock.createRequestCallCount(), 1);
     }
 
     // -----------------------------------------------------------------
@@ -628,6 +832,27 @@ contract ToldyaHubTest is Test {
         hub.voidStalemate(id);
     }
 
+    function test_voidStalemate_voidsAbstainedMarketAfterTimeout() public {
+        (uint256 id, uint256 reqId) = _triggered(rob);
+        mockOracle.setOutcome(reqId, IOracle.Outcome.ABSTAIN, IOracle.Status.Settled);
+        vm.expectRevert(ToldyaHub.OracleAbstained.selector);
+        hub.resolveMarket(id);
+
+        // Fast-forward past deadline + RESOLUTION_TIMEOUT (14 days)
+        vm.warp(block.timestamp + 14 days);
+        hub.voidStalemate(id);
+        assertEq(uint256(hub.getMarket(id).status), uint256(ToldyaHub.Status.Voided));
+    }
+
+    function test_voidStalemate_voidsOracleSilentMarketAfterTimeout() public {
+        (uint256 id,) = _triggered(rob);
+        // mockOracle never gets setOutcome — Veto stays "silent" (Open).
+        // Hub stays in ResolutionRequested.
+        vm.warp(block.timestamp + 14 days);
+        hub.voidStalemate(id);
+        assertEq(uint256(hub.getMarket(id).status), uint256(ToldyaHub.Status.Voided));
+    }
+
     // -----------------------------------------------------------------
     // H5 — pause / unpause
     // -----------------------------------------------------------------
@@ -637,7 +862,7 @@ contract ToldyaHubTest is Test {
         vm.prank(rob);
         vm.expectRevert();
         hub.createMarket(
-            "q", "c", uint64(block.timestamp + 1 days), ToldyaHub.Side.Yes, 10 ether, true,
+            "bafybeigdyrTESTcid", uint64(block.timestamp + 1 days), ToldyaHub.Side.Yes, 10 ether, true,
             ToldyaHub.WagerMode.Pool, 0, new address[](0)
         );
     }
