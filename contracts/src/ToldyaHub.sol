@@ -3,9 +3,11 @@ pragma solidity ^0.8.26;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
-import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
-import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
+import {Initializable} from "@openzeppelin-contracts-upgradeable/proxy/utils/Initializable.sol";
+import {UUPSUpgradeable} from "@openzeppelin-contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
+import {OwnableUpgradeable} from "@openzeppelin-contracts-upgradeable/access/OwnableUpgradeable.sol";
+import {PausableUpgradeable} from "@openzeppelin-contracts-upgradeable/utils/PausableUpgradeable.sol";
 import {IOracle} from "./interfaces/IOracle.sol";
 
 /// @title ToldyaHub
@@ -14,7 +16,13 @@ import {IOracle} from "./interfaces/IOracle.sol";
 ///         deadline passes an AI oracle resolves the outcome and the winning pool
 ///         splits the entire pot pro-rata to net stake. If only one side has any
 ///         stake at resolution, the market is voided and stakers are refunded.
-contract ToldyaHub is ReentrancyGuard, Ownable, Pausable {
+contract ToldyaHub is
+    Initializable,
+    UUPSUpgradeable,
+    OwnableUpgradeable,
+    PausableUpgradeable,
+    ReentrancyGuardTransient
+{
     using SafeERC20 for IERC20;
 
     enum Side {
@@ -84,7 +92,13 @@ contract ToldyaHub is ReentrancyGuard, Ownable, Pausable {
     ///         oracle or one stubborn voter would lock funds forever.
     uint256 public constant RESOLUTION_TIMEOUT = 14 days;
 
-    IERC20 public immutable stakeToken;
+    // STORAGE LAYOUT — DO NOT REORDER.
+    // Append-only. To add a field, consume a slot from `__gap` at the bottom.
+    // Reordering or removing any field breaks deployed proxies.
+    // Note: fields appended to the `Market` struct are safe because Market lives
+    // in a `mapping` (per-key slot is computed from key + struct base, so adding
+    // fields at the end of Market just consumes higher slots).
+    IERC20 public stakeToken;
     IOracle public oracle;
     address public treasury;
 
@@ -162,11 +176,37 @@ contract ToldyaHub is ReentrancyGuard, Ownable, Pausable {
     error PairMustOpposeCreator();
     error PairAmountMustMatch();
 
-    constructor(IERC20 _stakeToken, address _oracle, address _treasury) Ownable(msg.sender) {
+    /// @custom:oz-upgrades-unsafe-allow constructor
+    constructor() {
+        _disableInitializers();
+    }
+
+    /// @notice One-time initializer for the proxy. Called atomically by the
+    ///         deploy script via `ERC1967Proxy(impl, initData)`. Cannot be
+    ///         called again on the proxy, and cannot be called on the
+    ///         implementation contract at all (disabled by the constructor).
+    /// @param _stakeToken ERC-20 used for all stakes in this hub.
+    /// @param _oracle    Address of the IOracle implementation (Veto proxy in prod).
+    /// @param _treasury  Recipient of protocol fees.
+    /// @param _owner     Initial owner. Holds upgrade authority. Use a multisig
+    ///                   in production.
+    function initialize(
+        IERC20 _stakeToken,
+        address _oracle,
+        address _treasury,
+        address _owner
+    ) external initializer {
+        __Ownable_init(_owner);
+        __Pausable_init();
         stakeToken = _stakeToken;
         oracle = IOracle(_oracle);
         treasury = _treasury;
     }
+
+    /// @notice UUPS upgrade authorization. Owner-only. A compromised owner key
+    ///         can deploy a malicious implementation and drain funds — use a
+    ///         multisig + timelock in production.
+    function _authorizeUpgrade(address newImplementation) internal override onlyOwner {}
 
     // -------------------------------------------------------------------------
     // Admin
@@ -504,4 +544,10 @@ contract ToldyaHub is ReentrancyGuard, Ownable, Pausable {
             stakeToken.safeTransfer(treasury, fee);
         }
     }
+
+    /// @dev Reserved storage slots for future upgrades. Each new state variable
+    ///      added in a future implementation must consume one slot from this
+    ///      array (e.g. shrink to `uint256[49]` and add `uint256 newField;`
+    ///      above it). Reordering or skipping breaks proxy storage.
+    uint256[50] private __gap;
 }

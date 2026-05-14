@@ -6,6 +6,8 @@ import {ToldyaHub} from "../src/ToldyaHub.sol";
 import {MockToken} from "../src/mocks/MockToken.sol";
 import {MockOracle} from "../src/mocks/MockOracle.sol";
 import {IOracle} from "../src/interfaces/IOracle.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {Upgrades} from "openzeppelin-foundry-upgrades/Upgrades.sol";
 
 contract ToldyaHubTest is Test {
     ToldyaHub hub;
@@ -23,7 +25,7 @@ contract ToldyaHubTest is Test {
     function setUp() public {
         token = new MockToken();
         mockOracle = new MockOracle();
-        hub = new ToldyaHub(token, address(mockOracle), treasury);
+        hub = _deployHub(token, address(mockOracle), treasury, address(this));
 
         vm.warp(START);
 
@@ -33,6 +35,22 @@ contract ToldyaHubTest is Test {
             vm.prank(users[i]);
             token.approve(address(hub), type(uint256).max);
         }
+    }
+
+    function _deployHub(
+        MockToken token_,
+        address oracle_,
+        address treasury_,
+        address owner_
+    ) internal returns (ToldyaHub) {
+        address proxy = Upgrades.deployUUPSProxy(
+            "ToldyaHub.sol",
+            abi.encodeCall(
+                ToldyaHub.initialize,
+                (IERC20(address(token_)), oracle_, treasury_, owner_)
+            )
+        );
+        return ToldyaHub(proxy);
     }
 
     function _create(address creator, ToldyaHub.Side side, uint256 amount) internal returns (uint256) {
@@ -1065,5 +1083,14 @@ contract ToldyaHubTest is Test {
         // 3 stakers (rob, tom, sam) → quorum hit → goes to oracle as normal.
         hub.triggerResolution(id);
         assertEq(uint256(hub.getMarket(id).status), uint256(ToldyaHub.Status.ResolutionRequested));
+    }
+
+    // -----------------------------------------------------------------------
+    // UUPS upgradeability
+    // -----------------------------------------------------------------------
+
+    function test_initialize_revertsIfCalledTwice() public {
+        vm.expectRevert(); // OZ v5 throws InvalidInitialization
+        hub.initialize(token, address(mockOracle), treasury, address(this));
     }
 }
