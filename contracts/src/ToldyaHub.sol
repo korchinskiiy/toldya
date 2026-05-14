@@ -3,7 +3,6 @@ pragma solidity ^0.8.26;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
 import {Initializable} from "@openzeppelin-contracts-upgradeable/proxy/utils/Initializable.sol";
 import {UUPSUpgradeable} from "@openzeppelin-contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import {OwnableUpgradeable} from "@openzeppelin-contracts-upgradeable/access/OwnableUpgradeable.sol";
@@ -20,10 +19,66 @@ contract ToldyaHub is
     Initializable,
     UUPSUpgradeable,
     OwnableUpgradeable,
-    PausableUpgradeable,
-    ReentrancyGuardTransient
+    PausableUpgradeable
 {
     using SafeERC20 for IERC20;
+
+    // --- Reentrancy guard (inline, no constructor) ---
+    //
+    // We inline the guard rather than inheriting OZ's `ReentrancyGuard` for two
+    // reasons:
+    //   1. OZ's `ReentrancyGuard` writes `_status = NOT_ENTERED (1)` in its
+    //      constructor. The openzeppelin-foundry-upgrades validator rejects
+    //      any constructor in inherited contracts, even when (as here) the
+    //      runtime behavior is proxy-safe.
+    //   2. OZ's `ReentrancyGuardTransient` uses `tload`/`tstore`, which are
+    //      Cancun-only opcodes. The deployment target chain runs Shanghai EVM,
+    //      so the deployed bytecode must avoid them.
+    //
+    // The guard below uses regular storage at the same ERC-7201 namespaced slot
+    // OZ uses for `ReentrancyGuard`, so storage layout is forward-compatible
+    // with a future migration to OZ's implementation if Cancun ever lands on
+    // the target chain. The check is `_status == ENTERED (2)`, which works
+    // correctly with a fresh proxy reading `_status == 0` (treated as
+    // not-entered), so no initializer is required. We forfeit OZ's small
+    // gas-refund optimization (initializing to 1 instead of 0 on first call),
+    // which is negligible compared to the alternative tradeoffs.
+
+    // keccak256(abi.encode(uint256(keccak256("openzeppelin.storage.ReentrancyGuard")) - 1)) & ~bytes32(uint256(0xff))
+    bytes32 private constant _REENTRANCY_GUARD_STORAGE =
+        0x9b779b17422d0df92223018b32b4d1fa46e071723d6817e2486d003becc55f00;
+
+    uint256 private constant _NOT_ENTERED = 1;
+    uint256 private constant _ENTERED = 2;
+
+    error ReentrancyGuardReentrantCall();
+
+    modifier nonReentrant() {
+        _nonReentrantBefore();
+        _;
+        _nonReentrantAfter();
+    }
+
+    function _nonReentrantBefore() private {
+        bytes32 slot = _REENTRANCY_GUARD_STORAGE;
+        uint256 status;
+        assembly {
+            status := sload(slot)
+        }
+        if (status == _ENTERED) {
+            revert ReentrancyGuardReentrantCall();
+        }
+        assembly {
+            sstore(slot, _ENTERED)
+        }
+    }
+
+    function _nonReentrantAfter() private {
+        bytes32 slot = _REENTRANCY_GUARD_STORAGE;
+        assembly {
+            sstore(slot, _NOT_ENTERED)
+        }
+    }
 
     enum Side {
         Yes,
