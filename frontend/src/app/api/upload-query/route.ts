@@ -26,7 +26,7 @@ export async function POST(req: NextRequest) {
             {
                 error:
                     "Pinata is not configured. Set PINATA_JWT (create a key " +
-                    "at https://app.pinata.cloud/keys with pinFileToIPFS scope).",
+                    "at https://app.pinata.cloud/keys with pinJSONToIPFS scope).",
             },
             {status: 500},
         );
