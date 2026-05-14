@@ -26,8 +26,7 @@ export const hubAbi = [
         name: "createMarket",
         stateMutability: "nonpayable",
         inputs: [
-            {name: "question", type: "string"},
-            {name: "criteria", type: "string"},
+            {name: "queryCid", type: "string"},
             {name: "deadline", type: "uint64"},
             {name: "side", type: "uint8"},
             {name: "amount", type: "uint256"},

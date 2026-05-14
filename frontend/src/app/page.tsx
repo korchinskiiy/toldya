@@ -431,8 +431,22 @@ function CreatePanel() {
                 args: [address, HUB_ADDRESS],
             })) as bigint;
 
+            setStage("Pinning question (1/3)");
+            const uploadRes = await fetch("/api/upload-query", {
+                method: "POST",
+                headers: {"Content-Type": "application/json"},
+                body: JSON.stringify({question, criteria}),
+            });
+            if (!uploadRes.ok) {
+                const body = (await uploadRes.json().catch(() => ({}))) as {
+                    error?: string;
+                };
+                throw new Error(body.error || `upload failed (${uploadRes.status})`);
+            }
+            const {url: queryCid} = (await uploadRes.json()) as {url: string};
+
             if (allowance < wei) {
-                setStage("Approving TAIKO (1/2)");
+                setStage("Approving TAIKO (2/3)");
                 const aHash = await writeContractAsync({
                     chainId: ALLOWED_CHAIN.id,
                     address: TOKEN_ADDRESS,
@@ -452,15 +466,14 @@ function CreatePanel() {
             const allowed = accessMode === "friends" ? parseFriendsList() : [];
             const minStakersNum = mode === 1 ? 0 : Math.max(0, Number(minStakers) | 0);
 
-            setStage("Creating market (2/2)");
+            setStage("Creating market (3/3)");
             const hash = await writeContractAsync({
                 chainId: ALLOWED_CHAIN.id,
                 address: HUB_ADDRESS,
                 abi: hubAbi,
                 functionName: "createMarket",
                 args: [
-                    question,
-                    criteria,
+                    queryCid,
                     deadlineTs,
                     side,
                     wei,
