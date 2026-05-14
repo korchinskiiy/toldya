@@ -1115,4 +1115,12 @@ contract ToldyaHubTest is Test {
         );
         hub.upgradeToAndCall(address(v2Impl), "");
     }
+
+    function test_upgradeToAndCall_succeedsForOwner() public {
+        // address(this) is the owner (set in setUp via _deployHub).
+        ToldyaHubV2Mock v2Impl = new ToldyaHubV2Mock();
+        hub.upgradeToAndCall(address(v2Impl), "");
+        // Proxy now delegates to V2Mock. The version() function only exists on V2.
+        assertEq(ToldyaHubV2Mock(address(hub)).version(), "v2-mock");
+    }
 }
