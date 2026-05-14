@@ -35,7 +35,7 @@ export async function POST(req: NextRequest) {
     let raw: unknown;
     try {
         const text = await req.text();
-        if (text.length > MAX_BODY_BYTES) {
+        if (Buffer.byteLength(text, "utf8") > MAX_BODY_BYTES) {
             return NextResponse.json(
                 {error: `body exceeds ${MAX_BODY_BYTES} bytes`},
                 {status: 413},
