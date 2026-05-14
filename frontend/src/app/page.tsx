@@ -5,6 +5,7 @@ import {useAccount, useBalance, useChainId, usePublicClient, useReadContract, us
 import {useAppKit} from "@reown/appkit/react";
 import {ALLOWED_CHAIN} from "@/lib/wagmi";
 import {HUB_ADDRESS, TOKEN_ADDRESS, erc20Abi, hubAbi} from "@/lib/contracts";
+import {fetchQueryPayload} from "@/lib/queryPayload";
 import {deadlineLabel, formatTaiko, parseTaiko} from "@/lib/format";
 import {EvidenceList} from "@/components/EvidenceList";
 import {EvidenceUpload} from "@/components/EvidenceUpload";
@@ -38,10 +39,14 @@ type Market = {
     minStakers: number;
     matched: boolean;
     isPublic: boolean;
-    question: string;
-    criteria: string;
+    queryCid: string;
+    oracleRequestId: bigint;
     yesPool: bigint;
     noPool: bigint;
+    // Resolved off-chain from queryCid. Empty string while loading or on
+    // fetch failure — existing JSX renders that gracefully as a blank row.
+    question: string;
+    criteria: string;
 };
 
 const STATUS_LABEL = ["Live", "Resolving", "YES won", "NO won", "Voided"];
@@ -431,8 +436,25 @@ function CreatePanel() {
                 args: [address, HUB_ADDRESS],
             })) as bigint;
 
+            setStage("Pinning question (1/3)");
+            const uploadRes = await fetch("/api/upload-query", {
+                method: "POST",
+                headers: {"Content-Type": "application/json"},
+                body: JSON.stringify({question, criteria}),
+            });
+            if (!uploadRes.ok) {
+                const body = (await uploadRes.json().catch(() => ({}))) as {
+                    error?: string;
+                };
+                throw new Error(body.error || `upload failed (${uploadRes.status})`);
+            }
+            // The route returns {url, cid}. We store the gateway URL on-chain
+            // (CID embedded in the path) so the read path can `fetch(queryCid)`
+            // directly without an IPFS resolver in the browser.
+            const {url: queryCid} = (await uploadRes.json()) as {url: string};
+
             if (allowance < wei) {
-                setStage("Approving TAIKO (1/2)");
+                setStage("Approving TAIKO (2/3)");
                 const aHash = await writeContractAsync({
                     chainId: ALLOWED_CHAIN.id,
                     address: TOKEN_ADDRESS,
@@ -452,15 +474,14 @@ function CreatePanel() {
             const allowed = accessMode === "friends" ? parseFriendsList() : [];
             const minStakersNum = mode === 1 ? 0 : Math.max(0, Number(minStakers) | 0);
 
-            setStage("Creating market (2/2)");
+            setStage("Creating market (3/3)");
             const hash = await writeContractAsync({
                 chainId: ALLOWED_CHAIN.id,
                 address: HUB_ADDRESS,
                 abi: hubAbi,
                 functionName: "createMarket",
                 args: [
-                    question,
-                    criteria,
+                    queryCid,
                     deadlineTs,
                     side,
                     wei,
@@ -741,8 +762,14 @@ function MarketList({address}: {address: `0x${string}` | undefined}) {
                             abi: hubAbi,
                             functionName: "getMarket",
                             args: [id],
-                        })) as Market;
-                        return {...m, id};
+                        })) as Omit<Market, "id" | "question" | "criteria">;
+                        const payload = await fetchQueryPayload(m.queryCid);
+                        return {
+                            ...m,
+                            id,
+                            question: payload?.question ?? "",
+                            criteria: payload?.criteria ?? "",
+                        } as Market;
                     }),
                 );
                 if (!cancelled) setMarkets(fetched.reverse());
