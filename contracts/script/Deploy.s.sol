@@ -36,7 +36,8 @@ contract Deploy is Script {
         // Deploys ToldyaHub implementation, then an ERC1967Proxy pointing at
         // it, then atomically calls initialize through the proxy in a single
         // tx batch. Deployer is the initial owner (upgrade authority). Swap
-        // to a multisig with setOwner() / Ownable2Step before mainnet.
+        // to a multisig with transferOwnership() before mainnet, or
+        // re-deploy inheriting Ownable2StepUpgradeable for a two-phase handoff.
         address proxy = Upgrades.deployUUPSProxy(
             "ToldyaHub.sol",
             abi.encodeCall(

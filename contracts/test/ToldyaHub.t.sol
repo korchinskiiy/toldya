@@ -8,6 +8,7 @@ import {MockOracle} from "../src/mocks/MockOracle.sol";
 import {IOracle} from "../src/interfaces/IOracle.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Upgrades} from "openzeppelin-foundry-upgrades/Upgrades.sol";
+import {Initializable} from "@openzeppelin-contracts-upgradeable/proxy/utils/Initializable.sol";
 
 contract ToldyaHubTest is Test {
     ToldyaHub hub;
@@ -1090,7 +1091,7 @@ contract ToldyaHubTest is Test {
     // -----------------------------------------------------------------------
 
     function test_initialize_revertsIfCalledTwice() public {
-        vm.expectRevert(); // OZ v5 throws InvalidInitialization
+        vm.expectRevert(Initializable.InvalidInitialization.selector);
         hub.initialize(token, address(mockOracle), treasury, address(this));
     }
 }
