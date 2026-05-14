@@ -1,0 +1,7 @@
+{
+  "name": "toldya-contracts",
+  "private": true,
+  "devDependencies": {
+    "@openzeppelin/upgrades-core": "^1.32.0"
+  }
+}
