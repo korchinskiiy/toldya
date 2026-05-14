@@ -120,6 +120,15 @@ elsewhere) update to:
 These match
 [`contracts/src/ToldyaHub.sol:182-197`](../../../contracts/src/ToldyaHub.sol).
 
+`hubAbi.getMarket.outputs[0].components` also drifts: drop `question` and
+`criteria`, replace with `{name: "queryCid", type: "string"}` and add
+`{name: "oracleRequestId", type: "uint256"}` between `isPublic` and `yesPool`,
+matching the `Market` struct order in
+[`contracts/src/ToldyaHub.sol:114-134`](../../../contracts/src/ToldyaHub.sol).
+The few call sites that currently read `.question` off the `getMarket` result
+(e.g. `frontend/src/lib/events.ts:163`) switch to reading `.queryCid` and
+resolving it through the fetcher in §5.
+
 ### 4. Create-market submit handler
 
 File: `frontend/src/app/page.tsx`, around the existing `createMarket`
