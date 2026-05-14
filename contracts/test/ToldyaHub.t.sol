@@ -7,7 +7,7 @@ import {MockToken} from "../src/mocks/MockToken.sol";
 import {MockOracle} from "../src/mocks/MockOracle.sol";
 import {IOracle} from "../src/interfaces/IOracle.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {Upgrades} from "openzeppelin-foundry-upgrades/Upgrades.sol";
+import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {Initializable} from "@openzeppelin-contracts-upgradeable/proxy/utils/Initializable.sol";
 
 contract ToldyaHubTest is Test {
@@ -44,14 +44,13 @@ contract ToldyaHubTest is Test {
         address treasury_,
         address owner_
     ) internal returns (ToldyaHub) {
-        address proxy = Upgrades.deployUUPSProxy(
-            "ToldyaHub.sol",
-            abi.encodeCall(
-                ToldyaHub.initialize,
-                (IERC20(address(token_)), oracle_, treasury_, owner_)
-            )
+        ToldyaHub impl = new ToldyaHub();
+        bytes memory initData = abi.encodeCall(
+            ToldyaHub.initialize,
+            (IERC20(address(token_)), oracle_, treasury_, owner_)
         );
-        return ToldyaHub(proxy);
+        ERC1967Proxy proxy = new ERC1967Proxy(address(impl), initData);
+        return ToldyaHub(address(proxy));
     }
 
     function _create(address creator, ToldyaHub.Side side, uint256 amount) internal returns (uint256) {

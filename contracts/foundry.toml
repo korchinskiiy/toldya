@@ -5,28 +5,10 @@ libs = ["lib"]
 test = "test"
 script = "script"
 solc_version = "0.8.26"
-# NOTE: The deployment target chain runs Shanghai EVM, but we set Cancun here
-# because the openzeppelin-foundry-upgrades plugin transitively imports OZ
-# Strings/Bytes which use mcopy in inline assembly — solc refuses to compile
-# those under shanghai. Source code under `src/` MUST avoid Cancun-only
-# constructs (ReentrancyGuardTransient, raw transient storage, blobhash, etc.)
-# so the deployed bytecode stays as Shanghai-pure as possible.
-#
-# CAVEAT: solc 0.8.26 under evm_version=cancun may still emit MCOPY as a
-# memory-copy optimization even when the source uses no Cancun constructs.
-# Verify with `cast disassemble` on `out/ToldyaHub.sol/ToldyaHub.json`
-# before deploying to a strictly-Shanghai chain. If MCOPY appears, options
-# are: (a) confirm the target actually rejects MCOPY (many "Shanghai"-labeled
-# L2s tolerate it), or (b) split the deploy path so ToldyaHub.sol is compiled
-# under shanghai while the upgrades plugin stays under cancun for validation.
-evm_version = "cancun"
+evm_version = "shanghai"
 optimizer = true
 optimizer_runs = 200
 via_ir = true
-ffi = true
-ast = true
-build_info = true
-extra_output = ["storageLayout"]
 
 [fmt]
 line_length = 110

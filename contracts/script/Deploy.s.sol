@@ -2,10 +2,10 @@
 pragma solidity ^0.8.26;
 
 import {Script, console2} from "forge-std/Script.sol";
+import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {ToldyaHub} from "../src/ToldyaHub.sol";
 import {MockToken} from "../src/mocks/MockToken.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {Upgrades} from "openzeppelin-foundry-upgrades/Upgrades.sol";
 
 contract Deploy is Script {
     function run() external {
@@ -33,18 +33,17 @@ contract Deploy is Script {
             token = IERC20(tokenAddr);
         }
 
-        // Deploys ToldyaHub implementation, then an ERC1967Proxy pointing at
-        // it, then atomically calls initialize through the proxy in a single
-        // tx batch. Deployer is the initial owner (upgrade authority). Swap
-        // to a multisig with transferOwnership() before mainnet, or
+        // Atomic deploy: implementation, then proxy with init data so the
+        // proxy is initialized in the same tx and nobody can race to call
+        // initialize. Deployer becomes the initial owner (upgrade authority).
+        // Swap to a multisig with transferOwnership() before mainnet, or
         // re-deploy inheriting Ownable2StepUpgradeable for a two-phase handoff.
-        address proxy = Upgrades.deployUUPSProxy(
-            "ToldyaHub.sol",
-            abi.encodeCall(
-                ToldyaHub.initialize,
-                (token, oracle, treasury, deployer)
-            )
+        ToldyaHub impl = new ToldyaHub();
+        bytes memory initData = abi.encodeCall(
+            ToldyaHub.initialize,
+            (token, oracle, treasury, deployer)
         );
+        ERC1967Proxy proxy = new ERC1967Proxy(address(impl), initData);
 
         vm.stopBroadcast();
 
@@ -52,6 +51,7 @@ contract Deploy is Script {
         console2.log("Oracle   ", oracle);
         console2.log("Treasury ", treasury);
         console2.log("Token    ", address(token));
-        console2.log("Hub proxy", proxy);
+        console2.log("Hub impl ", address(impl));
+        console2.log("Hub proxy", address(proxy));
     }
 }
