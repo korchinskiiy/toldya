@@ -9,6 +9,8 @@ import {IOracle} from "../src/interfaces/IOracle.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {Initializable} from "@openzeppelin-contracts-upgradeable/proxy/utils/Initializable.sol";
+import {OwnableUpgradeable} from "@openzeppelin-contracts-upgradeable/access/OwnableUpgradeable.sol";
+import {ToldyaHubV2Mock} from "./mocks/ToldyaHubV2Mock.sol";
 
 contract ToldyaHubTest is Test {
     ToldyaHub hub;
@@ -1101,5 +1103,16 @@ contract ToldyaHubTest is Test {
 
         vm.expectRevert(Initializable.InvalidInitialization.selector);
         ToldyaHub(impl).initialize(token, address(mockOracle), treasury, address(this));
+    }
+
+    function test_authorizeUpgrade_onlyOwner() public {
+        // rob is not the owner (the test contract is). Deploy a V2 impl to
+        // attempt to upgrade to.
+        ToldyaHubV2Mock v2Impl = new ToldyaHubV2Mock();
+        vm.prank(rob);
+        vm.expectRevert(
+            abi.encodeWithSelector(OwnableUpgradeable.OwnableUnauthorizedAccount.selector, rob)
+        );
+        hub.upgradeToAndCall(address(v2Impl), "");
     }
 }
