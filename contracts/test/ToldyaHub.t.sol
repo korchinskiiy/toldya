@@ -1123,4 +1123,37 @@ contract ToldyaHubTest is Test {
         // Proxy now delegates to V2Mock. The version() function only exists on V2.
         assertEq(ToldyaHubV2Mock(address(hub)).version(), "v2-mock");
     }
+
+    function test_upgradeToAndCall_preservesState() public {
+        // Create a market with stakes on both sides.
+        uint256 marketId = _create(rob, ToldyaHub.Side.Yes, 100 ether);
+        vm.prank(tom);
+        hub.stake(marketId, ToldyaHub.Side.No, 50 ether);
+        vm.prank(sam);
+        hub.stake(marketId, ToldyaHub.Side.Yes, 25 ether);
+
+        // Snapshot pre-upgrade state.
+        ToldyaHub.Market memory before_ = hub.getMarket(marketId);
+        uint256 robYesBefore = hub.yesStake(marketId, rob);
+        uint256 tomNoBefore = hub.noStake(marketId, tom);
+        uint256 samYesBefore = hub.yesStake(marketId, sam);
+
+        // Upgrade.
+        ToldyaHubV2Mock v2Impl = new ToldyaHubV2Mock();
+        hub.upgradeToAndCall(address(v2Impl), "");
+
+        // Verify all storage survived.
+        ToldyaHub.Market memory after_ = hub.getMarket(marketId);
+        assertEq(after_.creator, before_.creator);
+        assertEq(after_.deadline, before_.deadline);
+        assertEq(uint8(after_.status), uint8(before_.status));
+        assertEq(after_.yesPool, before_.yesPool);
+        assertEq(after_.noPool, before_.noPool);
+        assertEq(hub.yesStake(marketId, rob), robYesBefore);
+        assertEq(hub.noStake(marketId, tom), tomNoBefore);
+        assertEq(hub.yesStake(marketId, sam), samYesBefore);
+
+        // And the new impl is actually live.
+        assertEq(ToldyaHubV2Mock(address(hub)).version(), "v2-mock");
+    }
 }
