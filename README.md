@@ -123,6 +123,14 @@ creator.
   hub owner replacing the oracle address — fine for friends-mode, not fine for
   high-stakes markets.
 
+## Legal
+
+- [`TERMS.md`](./TERMS.md) — Terms of Service
+- [`COMPLIANCE.md`](./COMPLIANCE.md) — Operator compliance obligations
+- [`SECURITY.md`](./SECURITY.md) — Vulnerability reporting
+- [`docs/risk-disclosure.md`](./docs/risk-disclosure.md) — Risk disclosure
+- [`docs/privacy-policy.md`](./docs/privacy-policy.md) — Privacy Policy (GDPR/CCPA)
+
 ## License
 
-MIT
+MIT — see [`LICENSE`](./LICENSE).
