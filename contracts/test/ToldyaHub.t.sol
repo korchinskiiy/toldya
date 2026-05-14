@@ -6,6 +6,11 @@ import {ToldyaHub} from "../src/ToldyaHub.sol";
 import {MockToken} from "../src/mocks/MockToken.sol";
 import {MockOracle} from "../src/mocks/MockOracle.sol";
 import {IOracle} from "../src/interfaces/IOracle.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
+import {Initializable} from "@openzeppelin-contracts-upgradeable/proxy/utils/Initializable.sol";
+import {OwnableUpgradeable} from "@openzeppelin-contracts-upgradeable/access/OwnableUpgradeable.sol";
+import {ToldyaHubV2Mock} from "./mocks/ToldyaHubV2Mock.sol";
 
 contract ToldyaHubTest is Test {
     ToldyaHub hub;
@@ -23,7 +28,7 @@ contract ToldyaHubTest is Test {
     function setUp() public {
         token = new MockToken();
         mockOracle = new MockOracle();
-        hub = new ToldyaHub(token, address(mockOracle), treasury);
+        hub = _deployHub(token, address(mockOracle), treasury, address(this));
 
         vm.warp(START);
 
@@ -33,6 +38,21 @@ contract ToldyaHubTest is Test {
             vm.prank(users[i]);
             token.approve(address(hub), type(uint256).max);
         }
+    }
+
+    function _deployHub(
+        MockToken token_,
+        address oracle_,
+        address treasury_,
+        address owner_
+    ) internal returns (ToldyaHub) {
+        ToldyaHub impl = new ToldyaHub();
+        bytes memory initData = abi.encodeCall(
+            ToldyaHub.initialize,
+            (IERC20(address(token_)), oracle_, treasury_, owner_)
+        );
+        ERC1967Proxy proxy = new ERC1967Proxy(address(impl), initData);
+        return ToldyaHub(address(proxy));
     }
 
     function _create(address creator, ToldyaHub.Side side, uint256 amount) internal returns (uint256) {
@@ -1065,5 +1085,75 @@ contract ToldyaHubTest is Test {
         // 3 stakers (rob, tom, sam) → quorum hit → goes to oracle as normal.
         hub.triggerResolution(id);
         assertEq(uint256(hub.getMarket(id).status), uint256(ToldyaHub.Status.ResolutionRequested));
+    }
+
+    // -----------------------------------------------------------------------
+    // UUPS upgradeability
+    // -----------------------------------------------------------------------
+
+    function test_initialize_revertsIfCalledTwice() public {
+        vm.expectRevert(Initializable.InvalidInitialization.selector);
+        hub.initialize(token, address(mockOracle), treasury, address(this));
+    }
+
+    function test_initialize_revertsOnImplementationDirectly() public {
+        // ERC-1967 canonical implementation slot: keccak256("eip1967.proxy.implementation") - 1
+        bytes32 implSlot = 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc;
+        address impl = address(uint160(uint256(vm.load(address(hub), implSlot))));
+
+        vm.expectRevert(Initializable.InvalidInitialization.selector);
+        ToldyaHub(impl).initialize(token, address(mockOracle), treasury, address(this));
+    }
+
+    function test_authorizeUpgrade_onlyOwner() public {
+        // rob is not the owner (the test contract is). Deploy a V2 impl to
+        // attempt to upgrade to.
+        ToldyaHubV2Mock v2Impl = new ToldyaHubV2Mock();
+        vm.prank(rob);
+        vm.expectRevert(
+            abi.encodeWithSelector(OwnableUpgradeable.OwnableUnauthorizedAccount.selector, rob)
+        );
+        hub.upgradeToAndCall(address(v2Impl), "");
+    }
+
+    function test_upgradeToAndCall_succeedsForOwner() public {
+        // address(this) is the owner (set in setUp via _deployHub).
+        ToldyaHubV2Mock v2Impl = new ToldyaHubV2Mock();
+        hub.upgradeToAndCall(address(v2Impl), "");
+        // Proxy now delegates to V2Mock. The version() function only exists on V2.
+        assertEq(ToldyaHubV2Mock(address(hub)).version(), "v2-mock");
+    }
+
+    function test_upgradeToAndCall_preservesState() public {
+        // Create a market with stakes on both sides.
+        uint256 marketId = _create(rob, ToldyaHub.Side.Yes, 100 ether);
+        vm.prank(tom);
+        hub.stake(marketId, ToldyaHub.Side.No, 50 ether);
+        vm.prank(sam);
+        hub.stake(marketId, ToldyaHub.Side.Yes, 25 ether);
+
+        // Snapshot pre-upgrade state.
+        ToldyaHub.Market memory before_ = hub.getMarket(marketId);
+        uint256 robYesBefore = hub.yesStake(marketId, rob);
+        uint256 tomNoBefore = hub.noStake(marketId, tom);
+        uint256 samYesBefore = hub.yesStake(marketId, sam);
+
+        // Upgrade.
+        ToldyaHubV2Mock v2Impl = new ToldyaHubV2Mock();
+        hub.upgradeToAndCall(address(v2Impl), "");
+
+        // Verify all storage survived.
+        ToldyaHub.Market memory after_ = hub.getMarket(marketId);
+        assertEq(after_.creator, before_.creator);
+        assertEq(after_.deadline, before_.deadline);
+        assertEq(uint8(after_.status), uint8(before_.status));
+        assertEq(after_.yesPool, before_.yesPool);
+        assertEq(after_.noPool, before_.noPool);
+        assertEq(hub.yesStake(marketId, rob), robYesBefore);
+        assertEq(hub.noStake(marketId, tom), tomNoBefore);
+        assertEq(hub.yesStake(marketId, sam), samYesBefore);
+
+        // And the new impl is actually live.
+        assertEq(ToldyaHubV2Mock(address(hub)).version(), "v2-mock");
     }
 }
